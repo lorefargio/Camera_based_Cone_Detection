@@ -1,0 +1,43 @@
+{
+  "configByAnyCondition": [
+    {
+      "id": "Image",
+      "config": {
+        "topic": "/perception/debug_image"
+      }
+    },
+    {
+      "id": "3D",
+      "config": {
+        "layers": {
+          "/perception/markers": {
+            "visible": true,
+            "frameLocked": true
+          }
+        },
+        "cameraState": {
+          "perspective": true,
+          "distance": 10,
+          "phi": 60,
+          "thetaOffset": 0,
+          "target": [0, 0, 0],
+          "targetOffset": [0, 0, 0],
+          "targetOrientation": [0, 0, 0, 1],
+          "fovy": 45,
+          "near": 0.5,
+          "far": 5000
+        }
+      }
+    }
+  ],
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": "Image!4f8z9r",
+    "second": "3D!1v8z9r",
+    "direction": "row"
+  }
+}
