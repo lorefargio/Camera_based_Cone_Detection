@@ -20,7 +20,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(CUDA QUIET)
 
-# TensorRT must be found manually or via a FindTensorRT.cmake module
+# TensorRT must be found manually
 find_path(TENSORRT_INCLUDE_DIR NvInfer.h)
 find_library(TENSORRT_LIBRARY nvinfer)
 find_library(TENSORRT_PARSER nvonnxparser)
@@ -46,17 +46,27 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
     add_executable(zed_fusion_node src/main.cpp)
     target_link_libraries(zed_fusion_node zed_fusion_core)
 
-    add_executable(test_yolo_standalone src/test_yolo_standalone.cpp)
-    target_link_libraries(test_yolo_standalone zed_fusion_core)
+    add_executable(video_tester src/test_video.cpp src/yolo26_tensorrt.cpp)
+    target_link_libraries(video_tester
+      ${OpenCV_LIBRARIES}
+      ${CUDA_LIBRARIES}
+      ${TENSORRT_LIBRARY}
+    )
+    # MODIFICA NECESSARIA: Aggiunge i path di ROS 2 per video_tester
+    ament_target_dependencies(video_tester
+      rclcpp geometry_msgs sensor_msgs cv_bridge
+    )
 
-    install(TARGETS zed_fusion_core zed_fusion_node test_yolo_standalone
+    # MODIFICA NECESSARIA: Aggiunto video_tester all'installazione
+    install(TARGETS zed_fusion_core zed_fusion_node video_tester
       ARCHIVE DESTINATION lib
       LIBRARY DESTINATION lib
       RUNTIME DESTINATION lib/${PROJECT_NAME}
     )
 else()
-    message(WARNING "CUDA or TensorRT NOT found. Compilation will likely fail if attempted.")
+    message(WARNING "CUDA or TensorRT NOT found. Compilation will likely fail.")
 endif()
+
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY models/ DESTINATION share/${PROJECT_NAME}/models)

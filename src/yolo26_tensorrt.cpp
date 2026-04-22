@@ -1,201 +1,222 @@
 #include "zed_fusion_perception/yolo26_tensorrt.hpp"
+#include <cmath>
+#include <cuda_runtime_api.h>
 #include <fstream>
 #include <iostream>
-#include <cuda_runtime_api.h>
+#include <opencv2/dnn.hpp>
 
+// Logger TensorRT
 class Logger : public nvinfer1::ILogger {
-    void log(Severity severity, const char* msg) noexcept override {
-        if (severity <= Severity::kWARNING)
-            std::cout << msg << std::endl;
-    }
+  void log(Severity severity, const char *msg) noexcept override {
+    if (severity <= Severity::kWARNING)
+      std::cout << "[TRT] " << msg << std::endl;
+  }
 } gLogger;
 
-Yolo26nSeg::Yolo26nSeg(const std::string& engine_path, float conf_threshold, float nms_threshold)
+Yolo26nSeg::Yolo26nSeg(const std::string &engine_path, float conf_threshold,
+                       float nms_threshold)
     : conf_threshold_(conf_threshold), nms_threshold_(nms_threshold) {
-    loadEngine(engine_path);
-    allocateBuffers();
-    cudaStreamCreate(&stream_);
+  loadEngine(engine_path);
+
+  allocateBuffers();
+  cudaStreamCreate(&stream_);
 }
 
 Yolo26nSeg::~Yolo26nSeg() {
-    cudaStreamDestroy(stream_);
-    for (void* buf : buffers_) {
-        cudaFree(buf);
-    }
-    if (context_) context_->destroy();
-    if (engine_) engine_->destroy();
-    if (runtime_) runtime_->destroy();
+  cudaStreamDestroy(stream_);
+  for (void *buf : buffers_)
+    cudaFree(buf);
 }
 
-void Yolo26nSeg::loadEngine(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.good()) {
-        throw std::runtime_error("Failed to read engine file: " + path);
+void Yolo26nSeg::loadEngine(const std::string &path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file.good())
+    throw std::runtime_error("Failed to read engine file: " + path);
+
+  file.seekg(0, file.end);
+  size_t size = file.tellg();
+  file.seekg(0, file.beg);
+  std::vector<char> data(size);
+  file.read(data.data(), size);
+  file.close();
+
+  runtime_.reset(nvinfer1::createInferRuntime(gLogger));
+  engine_.reset(runtime_->deserializeCudaEngine(data.data(), size));
+
+  // CREIAMO IL CONTEXT PRIMA DI USARLO
+  context_.reset(engine_->createExecutionContext());
+
+  // In TRT 10 gli indici possono variare. Identifichiamo i tensori per NOME e
+  // SHAPE
+  for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
+    std::string name = engine_->getIOTensorName(i);
+    nvinfer1::Dims dims = engine_->getTensorShape(name.c_str());
+    nvinfer1::DataType type = engine_->getTensorDataType(name.c_str());
+
+    // Stampa diagnostica fondamentale
+    std::cout << "Tensor " << i << ": " << name << " | Shape: ";
+    for (int j = 0; j < dims.nbDims; ++j)
+      std::cout << dims.d[j] << " ";
+    std::cout << "| DataType: " << (int)type << " (0=FP32, 1=FP16)"
+              << std::endl;
+
+    // Assegnazione dinamica basata sulle dimensioni
+    if (dims.nbDims == 4 && dims.d[1] == 3) {
+      input_name_ = name;
+      input_dims_ = dims;
+    } else if (dims.nbDims == 3) {
+      output0_name_ = name; // Box + Classi (es. 1x41x8400)
+      output0_dims_ = dims;
+    } else if (dims.nbDims == 4 && dims.d[1] == 32) {
+      output1_name_ = name; // Prototypes (es. 1x32x160x160)
+      output1_dims_ = dims;
     }
-    file.seekg(0, file.end);
-    size_t size = file.tellg();
-    file.seekg(0, file.beg);
-    char* data = new char[size];
-    file.read(data, size);
-    file.close();
-
-    runtime_ = nvinfer1::createInferRuntime(gLogger);
-    engine_ = runtime_->deserializeCudaEngine(data, size);
-    delete[] data;
-
-    context_ = engine_->createExecutionContext();
-
-    input_dims_ = engine_->getBindingDimensions(0);
-    output0_dims_ = engine_->getBindingDimensions(1);
-    output1_dims_ = engine_->getBindingDimensions(2);
+  }
 }
 
 void Yolo26nSeg::allocateBuffers() {
-    size_t input_size = 1;
-    for (int i = 0; i < input_dims_.nbDims; ++i) input_size *= input_dims_.d[i];
-    cudaMalloc(&buffers_[0], input_size * sizeof(float));
+  auto get_size = [](nvinfer1::Dims dims) {
+    size_t s = 1;
+    for (int i = 0; i < dims.nbDims; ++i)
+      s *= dims.d[i];
+    return s;
+  };
 
-    size_t output0_size = 1;
-    for (int i = 0; i < output0_dims_.nbDims; ++i) output0_size *= output0_dims_.d[i];
-    cudaMalloc(&buffers_[1], output0_size * sizeof(float));
+  size_t in_s = get_size(input_dims_);
+  size_t out0_s = get_size(output0_dims_);
+  size_t out1_s = get_size(output1_dims_);
 
-    size_t output1_size = 1;
-    for (int i = 0; i < output1_dims_.nbDims; ++i) output1_size *= output1_dims_.d[i];
-    cudaMalloc(&buffers_[2], output1_size * sizeof(float));
+  // Allocazione GPU
+  cudaMalloc(&buffers_[0], in_s * sizeof(float));
+  cudaMalloc(&buffers_[1], out0_s * sizeof(float));
+  cudaMalloc(&buffers_[2], out1_s * sizeof(float));
+
+  // Allocazione HOST PERSISTENTE (Previene corruzione asincrona)
+  host_input_batch_.resize(in_s);
+  host_output0_.resize(out0_s);
+  host_output1_.resize(out1_s);
 }
 
-void Yolo26nSeg::preprocess(const cv::Mat& src, float* dst) {
-    int input_w = input_dims_.d[3];
-    int input_h = input_dims_.d[2];
-    cv::Mat resized;
-    cv::resize(src, resized, cv::Size(input_w, input_h));
-    cv::Mat rgb;
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(rgb, CV_32FC3, 1.0 / 255.0);
+void Yolo26nSeg::preprocess(const cv::Mat &src, float *dst) {
+  cv::Mat bgr;
+  if (src.channels() == 4)
+    cv::cvtColor(src, bgr, cv::COLOR_BGRA2BGR);
+  else
+    bgr = src;
 
-    std::vector<cv::Mat> channels(3);
-    cv::split(rgb, channels);
-    for (int i = 0; i < 3; ++i) {
-        memcpy(dst + i * input_w * input_h, channels[i].data, input_w * input_h * sizeof(float));
-    }
+  cv::Size input_size(input_dims_.d[3], input_dims_.d[2]);
+
+  // Ricalca il preprocess dello script funzionante
+  cv::Mat blob;
+  cv::dnn::blobFromImage(bgr, blob, 1.0 / 255.0, input_size,
+                         cv::Scalar(0, 0, 0), true, false, CV_32F);
+
+
+  memcpy(dst, blob.ptr<float>(0), blob.total() * sizeof(float));
 }
 
-std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat& bgr_image) {
-    size_t input_vol = 1;
-    for (int i = 0; i < input_dims_.nbDims; ++i) input_vol *= input_dims_.d[i];
-    std::vector<float> input_data(input_vol);
-    preprocess(bgr_image, input_data.data());
+std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {
+  preprocess(bgr_image, host_input_batch_.data());
 
-    cudaMemcpyAsync(buffers_[0], input_data.data(), input_vol * sizeof(float), cudaMemcpyHostToDevice, stream_);
-    context_->enqueueV2(buffers_, stream_, nullptr);
+  // HtoD
+  cudaMemcpyAsync(buffers_[0], host_input_batch_.data(),
+                  host_input_batch_.size() * sizeof(float),
+                  cudaMemcpyHostToDevice, stream_);
 
-    size_t out0_vol = 1;
-    for (int i = 0; i < output0_dims_.nbDims; ++i) out0_vol *= output0_dims_.d[i];
-    std::vector<float> out0_host(out0_vol);
-    cudaMemcpyAsync(out0_host.data(), buffers_[1], out0_vol * sizeof(float), cudaMemcpyDeviceToHost, stream_);
+  // TRT 10 Binding
+  context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
+  context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
+  context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
 
-    size_t out1_vol = 1;
-    for (int i = 0; i < output1_dims_.nbDims; ++i) out1_vol *= output1_dims_.d[i];
-    std::vector<float> out1_host(out1_vol);
-    cudaMemcpyAsync(out1_host.data(), buffers_[2], out1_vol * sizeof(float), cudaMemcpyDeviceToHost, stream_);
+  // Esecuzione
+  if (!context_->enqueueV3(stream_))
+    return {};
 
-    cudaStreamSynchronize(stream_);
+  // DtoH
+  cudaMemcpyAsync(host_output0_.data(), buffers_[1],
+                  host_output0_.size() * sizeof(float), cudaMemcpyDeviceToHost,
+                  stream_);
+  cudaMemcpyAsync(host_output1_.data(), buffers_[2],
+                  host_output1_.size() * sizeof(float), cudaMemcpyDeviceToHost,
+                  stream_);
 
-    return postprocess(out0_host.data(), out1_host.data(), bgr_image.size());
+  // SINCRONIZZAZIONE (Cruciale per evitare quadratini scattanti)
+  cudaStreamSynchronize(stream_);
+
+  return postprocess(host_output0_.data(), host_output1_.data(),
+                     bgr_image.size());
 }
 
-std::vector<DetectedCone> Yolo26nSeg::postprocess(float* output0, float* output1, const cv::Size& original_size) {
-    std::vector<DetectedCone> detections;
-    int num_anchors = output0_dims_.d[2];
-    int data_size = output0_dims_.d[1]; // 4 + num_classes + 32
-    int num_classes = data_size - 4 - 32;
+std::vector<DetectedCone>
+Yolo26nSeg::postprocess(float *outA, float *outB,
+                        const cv::Size &original_size) {
+  std::vector<DetectedCone> detections;
 
-    std::vector<cv::Rect> bboxes;
-    std::vector<float> confidences;
-    std::vector<int> class_ids;
-    std::vector<std::vector<float>> mask_coeffs;
+  // Parametri estratti dai tuoi log
+  const int num_detections = 300;
+  const int num_channels = 38;
 
-    float scale_w = (float)original_size.width / input_dims_.d[3];
-    float scale_h = (float)original_size.height / input_dims_.d[2];
+  // Rapporto di scala (il modello lavora su 640x640)
+  float scale_w = (float)original_size.width / 640.0f;
+  float scale_h = (float)original_size.height / 640.0f;
 
-    for (int i = 0; i < num_anchors; ++i) {
-        float* data = output0 + i; // Assuming [1, 39, 8400] stored as column-major or similar? 
-        // Wait, if it's [1, 39, 8400], it's likely row-major in memory: [39][8400]
-        // So anchor i data is at offset i, i + 8400, i + 2*8400, ...
-        
-        float x = output0[i] * scale_w;
-        float y = output0[i + num_anchors] * scale_h;
-        float w = output0[i + 2 * num_anchors] * scale_w;
-        float h = output0[i + 3 * num_anchors] * scale_h;
+  for (int i = 0; i < num_detections; ++i) {
+    float *row = outA + (i * num_channels);
 
-        float max_score = 0;
-        int class_id = -1;
-        for (int c = 0; c < num_classes; ++c) {
-            float score = output0[i + (4 + c) * num_anchors];
-            if (score > max_score) {
-                max_score = score;
-                class_id = c;
-            }
-        }
+    float score = row[4]; // La confidenza è già al canale 4
 
-        if (max_score > conf_threshold_) {
-            bboxes.push_back(cv::Rect(x - w / 2, y - h / 2, w, h));
-            confidences.push_back(max_score);
-            class_ids.push_back(class_id);
-            
-            std::vector<float> coeffs(32);
-            for (int j = 0; j < 32; ++j) {
-                coeffs[j] = output0[i + (4 + num_classes + j) * num_anchors];
-            }
-            mask_coeffs.push_back(coeffs);
-        }
+    // Se lo score è 0, significa che abbiamo finito i rilevamenti validi
+    // (i modelli end2end riempiono il resto con zeri)
+    if (score < conf_threshold_)
+      continue;
+
+    DetectedCone det;
+    det.class_id = (int)row[5]; // Il Class ID è al canale 5
+    det.yolo_confidence = score;
+
+    // Coordinate x1, y1, x2, y2 (confermate dai tuoi log: 130, 449...)
+    float x1 = row[0] * scale_w;
+    float y1 = row[1] * scale_h;
+    float x2 = row[2] * scale_w;
+    float y2 = row[3] * scale_h;
+
+    // Calcoliamo centro e box per OpenCV
+    float w = x2 - x1;
+    float h = y2 - y1;
+    cv::Rect bbox(x1, y1, w, h);
+    det.center_2d = cv::Point2f(x1 + w / 2.0f, y1 + h / 2.0f);
+
+    // --- Elaborazione Maschera ---
+    // I prototipi sono sempre nel secondo buffer (outB)
+    cv::Mat protos(32, 160 * 160, CV_32F, outB);
+
+    // I coefficienti partono dal canale 6 e sono 32
+    cv::Mat coeffs(1, 32, CV_32F, row + 6);
+
+    cv::Mat res = coeffs * protos;
+    cv::Mat mask_small(160, 160, CV_32F, res.data);
+
+    // Sigmoide e soglia per la maschera
+    cv::Mat binary_mask;
+    cv::exp(-mask_small, binary_mask);
+    binary_mask = 1.0 / (1.0 + binary_mask);
+    cv::threshold(binary_mask, binary_mask, 0.5, 255, cv::THRESH_BINARY);
+    binary_mask.convertTo(binary_mask, CV_8U);
+
+    // Resize e pulizia ROI
+    cv::resize(binary_mask, binary_mask, original_size);
+    cv::Mat final_mask = cv::Mat::zeros(original_size, CV_8U);
+    cv::Rect roi =
+        bbox & cv::Rect(0, 0, original_size.width, original_size.height);
+    if (roi.width > 0 && roi.height > 0) {
+      binary_mask(roi).copyTo(final_mask(roi));
     }
 
-    std::vector<int> indices;
-    cv::dnn::NMSBoxes(bboxes, confidences, conf_threshold_, nms_threshold_, indices);
+    det.mask = final_mask;
+    det.mask_area = cv::countNonZero(det.mask);
 
-    cv::Mat prototypes(32, 160 * 160, CV_32F, output1);
+    detections.push_back(det);
+  }
 
-    for (int idx : indices) {
-        DetectedCone det;
-        det.class_id = class_ids[idx];
-        det.yolo_confidence = confidences[idx];
-        det.center_2d = cv::Point2f(bboxes[idx].x + bboxes[idx].width / 2.0f, bboxes[idx].y + bboxes[idx].height / 2.0f);
-        
-        // Mask generation
-        cv::Mat coeffs_mat(1, 32, CV_32F, mask_coeffs[idx].data());
-        cv::Mat res = coeffs_mat * prototypes;
-        cv::Mat mask_small(160, 160, CV_32F, res.data);
-        
-        for (int r = 0; r < 160; ++r) {
-            for (int c = 0; c < 160; ++c) {
-                mask_small.at<float>(r, c) = sigmoid(mask_small.at<float>(r, c));
-            }
-        }
-
-        cv::Mat binary_mask;
-        cv::threshold(mask_small, binary_mask, 0.5, 255, cv::THRESH_BINARY);
-        binary_mask.convertTo(binary_mask, CV_8U);
-
-        // Resize mask back to original bounding box or full image?
-        // Usually, we crop the mask to the bounding box region in the 160x160 space then resize.
-        // For simplicity here, resize to full image and then crop or just keep full.
-        // The blueprint says "binary mask" and "mask_area".
-        
-        cv::Mat mask_full;
-        cv::resize(binary_mask, mask_full, original_size, 0, 0, cv::INTER_LINEAR);
-        
-        // Optional: crop mask_full to bounding box to avoid bleed
-        cv::Mat cropped_mask = cv::Mat::zeros(original_size, CV_8U);
-        cv::Rect roi = bboxes[idx] & cv::Rect(0, 0, original_size.width, original_size.height);
-        if (roi.width > 0 && roi.height > 0) {
-            mask_full(roi).copyTo(cropped_mask(roi));
-        }
-
-        det.mask = cropped_mask;
-        det.mask_area = cv::countNonZero(det.mask);
-        detections.push_back(det);
-    }
-
-    return detections;
+  return detections;
 }

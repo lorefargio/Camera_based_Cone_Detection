@@ -16,13 +16,9 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold);
 
     // Subscriptions
-    image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-        "/zed2i/zed_node/rgb/image_rect_color", 10,
-        std::bind(&ZedPerceptionNode::imageCallback, this, std::placeholders(1)));
-    
-    info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-        "/zed2i/zed_node/rgb/camera_info", 10,
-        std::bind(&ZedPerceptionNode::cameraInfoCallback, this, std::placeholders(1)));
+    image_sub_ = this->create_subscription<sensor_msgs::msg::Image>("/zed/zed_node/rgb/color/rect/image", 10, std::bind(&ZedPerceptionNode::imageCallback, this, std::placeholders::_1));
+
+    info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>( "/zed2i/zed_node/rgb/camera_info", 10, std::bind(&ZedPerceptionNode::cameraInfoCallback, this, std::placeholders::_1));
 
     // Publishers
     debug_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/debug_image", 10);
@@ -108,8 +104,6 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     double yolo_ms = std::chrono::duration<double, std::milli>(end_yolo - start_yolo).count();
     double total_ms = std::chrono::duration<double, std::milli>(end_total - start_total).count();
     
-    RCLCPP_INFO(this->get_logger(), "PERF: YOLO: %.2fms | Total: %.2fms | Detected: %zu", 
-                yolo_ms, total_ms, detections.size());
     if (debug_pub_->get_subscription_count() > 0) {
         cv::Mat debug_img = cv_ptr->image.clone();
         for (const auto& det : detections) {
