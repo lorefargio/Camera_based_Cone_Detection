@@ -22,7 +22,7 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
 
     if (export_stats_) {
-        stats_file_.open("perception_stats.csv");
+        stats_file_.open("camera_stats.csv");
         stats_file_ << "timestamp,latency_ms,hz,detections\n";
     }
 
