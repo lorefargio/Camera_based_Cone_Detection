@@ -1,39 +1,77 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <cuda_fp16.h>
 #include <stdint.h>
 #include <math.h>
 
-// Preprocessing Kernel: BGR/RGBA to RGB, Resize, Normalize, HWC to CHW
-__global__ void preprocess_kernel(const uint8_t* src, float* dst, int src_w, int src_h, int dst_w, int dst_h, int channels) {
+// --- TEMPLATE PREPROCESSING: FP32 and FP16 support ---
+template <typename T>
+__global__ void preprocess_kernel_optimized(const uint8_t* src, T* dst, int src_w, int src_h, int dst_w, int dst_h, int channels) {
     int dx = blockIdx.x * blockDim.x + threadIdx.x;
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (dx < dst_w && dy < dst_h) {
-        float sx = (float)dx * src_w / dst_w;
-        float sy = (float)dy * src_h / dst_h;
+        float sx = (float)dx * (src_w - 1) / (dst_w - 1);
+        float sy = (float)dy * (src_h - 1) / (dst_h - 1);
 
         int x0 = (int)sx;
         int y0 = (int)sy;
-        
-        // Simple nearest neighbor for brevity (can be upgraded to bilinear)
-        int src_idx = (y0 * src_w + x0) * channels;
-        
-        // Output is CHW
+        int x1 = min(x0 + 1, src_w - 1);
+        int y1 = min(y0 + 1, src_h - 1);
+
+        float dx_weight = sx - x0;
+        float dy_weight = sy - y0;
+
         int area = dst_w * dst_h;
-        dst[0 * area + dy * dst_w + dx] = src[src_idx + 2] / 255.0f; // R
-        dst[1 * area + dy * dst_w + dx] = src[src_idx + 1] / 255.0f; // G
-        dst[2 * area + dy * dst_w + dx] = src[src_idx + 0] / 255.0f; // B
+
+        for (int c = 0; c < 3; ++c) {
+            int channel_idx = 2 - c; 
+            float p00 = src[(y0 * src_w + x0) * channels + channel_idx];
+            float p01 = src[(y0 * src_w + x1) * channels + channel_idx];
+            float p10 = src[(y1 * src_w + x0) * channels + channel_idx];
+            float p11 = src[(y1 * src_w + x1) * channels + channel_idx];
+
+            float val = (1.0f - dx_weight) * (1.0f - dy_weight) * p00 +
+                        dx_weight * (1.0f - dy_weight) * p01 +
+                        (1.0f - dx_weight) * dy_weight * p10 +
+                        dx_weight * dy_weight * p11;
+
+            dst[c * area + dy * dst_w + dx] = (T)(val / 255.0f);
+        }
     }
 }
 
-// Postprocessing: Mask Canvas Generation Kernel (Winner-take-all based on confidence)
-__global__ void postprocess_mask_kernel(
-    const float* output0,  // Detections (300, 38) -> [x1, y1, x2, y2, conf, class, mask_coeffs...]
-    const float* output1,  // Prototypes (32, 160, 160)
-    uint8_t* mask_canvas,  // Output ID map (W, H)
+// --- TEMPLATE POSTPROCESSING: FP32 and FP16 support ---
+#define MAX_DETECTIONS_SHARED 128
+
+template <typename T>
+__global__ void postprocess_mask_kernel_optimized(
+    const T* output0,
+    const T* output1,
+    uint8_t* mask_canvas,
     int canvas_w, int canvas_h,
     float conf_threshold
 ) {
+    __shared__ float s_coeffs[MAX_DETECTIONS_SHARED][32];
+    __shared__ float s_bboxes[MAX_DETECTIONS_SHARED][5];
+
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    int threads_per_block = blockDim.x * blockDim.y;
+
+    for (int i = tid; i < MAX_DETECTIONS_SHARED; i += threads_per_block) {
+        const T* row = output0 + i * 38;
+        s_bboxes[i][0] = (float)row[0] * canvas_w / 640.0f;
+        s_bboxes[i][1] = (float)row[1] * canvas_h / 640.0f;
+        s_bboxes[i][2] = (float)row[2] * canvas_w / 640.0f;
+        s_bboxes[i][3] = (float)row[3] * canvas_h / 640.0f;
+        s_bboxes[i][4] = (float)row[4];
+        
+        for (int c = 0; c < 32; ++c) {
+            s_coeffs[i][c] = (float)row[6 + c];
+        }
+    }
+    __syncthreads();
+
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -42,30 +80,21 @@ __global__ void postprocess_mask_kernel(
     uint8_t best_id = 0;
     float max_conf = conf_threshold;
 
-    // Scaling factors for prototypes (YOLO segmentation standard is 1/4 of input)
-    // Assuming input 640x640, prototypes are 160x160
     int px = x * 160 / canvas_w;
     int py = y * 160 / canvas_h;
+    int proto_offset = py * 160 + px;
 
-    for (int i = 0; i < 300; ++i) {
-        const float* row = output0 + i * 38;
-        float conf = row[4];
+    for (int i = 0; i < MAX_DETECTIONS_SHARED; ++i) {
+        float conf = s_bboxes[i][4];
         if (conf < max_conf) continue;
 
-        // BBox check (scaled to canvas)
-        float x1 = row[0] * canvas_w / 640.0f;
-        float y1 = row[1] * canvas_h / 640.0f;
-        float x2 = row[2] * canvas_w / 640.0f;
-        float y2 = row[3] * canvas_h / 640.0f;
-
-        if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
-            // Compute linear combination of prototypes and coefficients
+        if (x >= s_bboxes[i][0] && x <= s_bboxes[i][2] && y >= s_bboxes[i][1] && y <= s_bboxes[i][3]) {
             float mask_logit = 0.0f;
+            #pragma unroll
             for (int c = 0; c < 32; ++c) {
-                mask_logit += row[6 + c] * output1[c * 160 * 160 + py * 160 + px];
+                mask_logit += s_coeffs[i][c] * (float)output1[c * 25600 + proto_offset];
             }
             
-            // Fast sigmoid thresholding
             if (1.0f / (1.0f + expf(-mask_logit)) > 0.5f) {
                 best_id = (uint8_t)(i + 1);
                 max_conf = conf;
@@ -75,15 +104,20 @@ __global__ void postprocess_mask_kernel(
     mask_canvas[y * canvas_w + x] = best_id;
 }
 
-// Wrapper functions for C++ integration
-extern "C" void launch_preprocess(const uint8_t* src, float* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, cudaStream_t stream) {
+extern "C" void launch_preprocess(const uint8_t* src, void* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, bool is_fp16, cudaStream_t stream) {
     dim3 block(16, 16);
     dim3 grid((dst_w + block.x - 1) / block.x, (dst_h + block.y - 1) / block.y);
-    preprocess_kernel<<<grid, block, 0, stream>>>(src, dst, src_w, src_h, dst_w, dst_h, channels);
+    if (is_fp16)
+        preprocess_kernel_optimized<half><<<grid, block, 0, stream>>>(src, (half*)dst, src_w, src_h, dst_w, dst_h, channels);
+    else
+        preprocess_kernel_optimized<float><<<grid, block, 0, stream>>>(src, (float*)dst, src_w, src_h, dst_w, dst_h, channels);
 }
 
-extern "C" void launch_postprocess_mask(const float* output0, const float* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, cudaStream_t stream) {
+extern "C" void launch_postprocess_mask(const void* output0, const void* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, bool is_fp16, cudaStream_t stream) {
     dim3 block(16, 16);
     dim3 grid((canvas_w + block.x - 1) / block.x, (canvas_h + block.y - 1) / block.y);
-    postprocess_mask_kernel<<<grid, block, 0, stream>>>(output0, output1, mask_canvas, canvas_w, canvas_h, conf_threshold);
+    if (is_fp16)
+        postprocess_mask_kernel_optimized<half><<<grid, block, 0, stream>>>((half*)output0, (half*)output1, mask_canvas, canvas_w, canvas_h, conf_threshold);
+    else
+        postprocess_mask_kernel_optimized<float><<<grid, block, 0, stream>>>((float*)output0, (float*)output1, mask_canvas, canvas_w, canvas_h, conf_threshold);
 }

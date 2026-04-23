@@ -2,6 +2,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <fstream>
 
 ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     : Node("zed_perception_node", options) {
@@ -10,8 +11,26 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     float conf_threshold = this->declare_parameter("conf_threshold", 0.5);
     float nms_threshold = this->declare_parameter("nms_threshold", 0.45);
     publish_debug_ = this->declare_parameter("publish_debug", false);
+    export_stats_ = this->declare_parameter("export_stats", false);
 
     yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold);
+
+    // Startup Banner
+    RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
+    RCLCPP_INFO(this->get_logger(), " ZED PERCEPTION NODE INITIALIZED");
+    RCLCPP_INFO(this->get_logger(), " - Model: YOLO26n-Seg (End-to-End)");
+    RCLCPP_INFO(this->get_logger(), " - Inference: TensorRT 10.x");
+    RCLCPP_INFO(this->get_logger(), " - GPU Acceleration: CUDA Enabled");
+    RCLCPP_INFO(this->get_logger(), " - Preprocessing: GPU Bilinear Resize");
+    RCLCPP_INFO(this->get_logger(), " - Postprocessing: GPU Shared Memory Tiling");
+    RCLCPP_INFO(this->get_logger(), " - Stats Export: %s", export_stats_ ? "ENABLED" : "DISABLED");
+    RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
+
+    if (export_stats_) {
+        stats_file_.open("camera_stats.csv");
+        stats_file_ << "timestamp,latency_ms,hz,detections\n";
+        RCLCPP_INFO(this->get_logger(), "Performance stats will be exported to perception_stats.csv");
+    }
 
     image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
         "/zed/zed_node/rgb/color/rect/image", 10, std::bind(&ZedPerceptionNode::imageCallback, this, std::placeholders::_1));
@@ -59,7 +78,6 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
 
     geometry_msgs::msg::PoseArray camera_cones_msg;
     camera_cones_msg.header = msg->header;
-
     for (const auto& det : detections) {
         geometry_msgs::msg::Pose pose;
         pose.position = projectTo3D(det.center_2d, 5.0); 
@@ -75,21 +93,18 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     mask_msg->step = mask_msg->width;
     mask_msg->data.resize(canvas_size);
     cudaMemcpy(mask_msg->data.data(), d_mask_canvas, canvas_size, cudaMemcpyDeviceToHost);
-    
     mask_canvas_pub_->publish(*mask_msg);
 
     if (publish_debug_) {
         cv::Mat raw_mask(mask_msg->height, mask_msg->width, CV_8U, mask_msg->data.data());
-        
         auto get_class_color = [](int class_id) {
-            if (class_id == 0) return cv::Scalar(255, 0, 0);   // Blue
-            if (class_id == 1) return cv::Scalar(0, 255, 255); // Yellow
-            if (class_id == 2) return cv::Scalar(0, 165, 255); // Orange
-            if (class_id == 3) return cv::Scalar(0, 0, 255);   // Big Orange (Red)
-            if (class_id == 4) return cv::Scalar(128, 128, 128); // Fallen (Gray)
-            return cv::Scalar(255, 255, 255); // Default White
+            if (class_id == 0) return cv::Scalar(255, 0, 0);
+            if (class_id == 1) return cv::Scalar(0, 255, 255);
+            if (class_id == 2) return cv::Scalar(0, 165, 255);
+            if (class_id == 3) return cv::Scalar(0, 0, 255);
+            if (class_id == 4) return cv::Scalar(128, 128, 128);
+            return cv::Scalar(255, 255, 255);
         };
-
         if (debug_pub_->get_subscription_count() > 0) {
             cv::Mat debug_img = cv_ptr->image.clone();
             for (const auto& det : detections) {
@@ -97,7 +112,6 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
             }
             debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", debug_img).toImageMsg());
         }
-
         if (debug_mask_pub_->get_subscription_count() > 0) {
             cv::Mat color_mask = cv::Mat::zeros(raw_mask.size(), CV_8UC3);
             for (size_t i = 0; i < detections.size(); ++i) {
@@ -111,8 +125,13 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     auto end_node = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(end_node - start_node).count();
     double hz = 1000.0 / total_ms;
-    RCLCPP_INFO(this->get_logger(), "LATENCY: %.2f ms | FREQUENCY: %.2f Hz | CONES: %zu", 
-                total_ms, hz, detections.size());
+
+    if (export_stats_ && stats_file_.is_open()) {
+        auto now = this->get_clock()->now();
+        stats_file_ << now.nanoseconds() << "," << total_ms << "," << hz << "," << detections.size() << "\n";
+    }
+
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500, "LATENCY: %.2f ms | FREQUENCY: %.2f Hz", total_ms, hz);
 }
 
 geometry_msgs::msg::Point ZedPerceptionNode::projectTo3D(const cv::Point2f& center_2d, double depth) {

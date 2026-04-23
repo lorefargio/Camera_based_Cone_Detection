@@ -16,6 +16,7 @@ def generate_launch_description():
     bag = LaunchConfiguration('bag')
     engine_path = LaunchConfiguration('engine_path')
     publish_debug = LaunchConfiguration('publish_debug')
+    export_stats = LaunchConfiguration('export_stats')
     
     # 1. ZED Wrapper Launch
     zed_launch = IncludeLaunchDescription(
@@ -46,6 +47,7 @@ def generate_launch_description():
             'conf_threshold': 0.5,
             'nms_threshold': 0.45,
             'publish_debug': publish_debug,
+            'export_stats': export_stats,
         }],
         remappings=[
             ('/zed/zed_node/rgb/color/rect/image', '/zed/zed_node/rgb/color/rect/image'),
@@ -69,6 +71,9 @@ def generate_launch_description():
         
         DeclareLaunchArgument('publish_debug', default_value='true', 
                               description='Pubblica immagini di debug per visualizzazione'),
+        
+        DeclareLaunchArgument('export_stats', default_value='false', 
+                              description='Esporta i tempi di esecuzione in perception_stats.csv'),
 
         zed_launch,
         bag_play,

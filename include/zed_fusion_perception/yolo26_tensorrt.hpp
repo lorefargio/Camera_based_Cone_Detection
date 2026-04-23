@@ -5,10 +5,11 @@
 #include <opencv2/opencv.hpp>
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>
+#include <cuda_fp16.h>
 #include "zed_fusion_perception/detected_cone.hpp"
 
-extern "C" void launch_preprocess(const uint8_t* src, float* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, cudaStream_t stream);
-extern "C" void launch_postprocess_mask(const float* output0, const float* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, cudaStream_t stream);
+extern "C" void launch_preprocess(const uint8_t* src, void* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, bool is_fp16, cudaStream_t stream);
+extern "C" void launch_postprocess_mask(const void* output0, const void* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, bool is_fp16, cudaStream_t stream);
 
 class Yolo26nSeg {
 public:
@@ -29,7 +30,7 @@ private:
     void preprocess_gpu(const cv::Mat& src);
     
     // Handles NMS and Mask Generation
-    std::vector<DetectedCone> postprocess(float* output0, float* output1, const cv::Size& original_size);
+    std::vector<DetectedCone> postprocess(void* output0, void* output1, const cv::Size& original_size);
 
     // Cuda resources
     std::unique_ptr<nvinfer1::IRuntime> runtime_;
@@ -41,6 +42,7 @@ private:
     
     float conf_threshold_;
     float nms_threshold_;
+    bool is_fp16_;
 
     // Tensor shapes
     nvinfer1::Dims input_dims_;
@@ -52,8 +54,9 @@ private:
     std::string output0_name_;
     std::string output1_name_;
 
-    std::vector<float> host_output0_;
-    std::vector<float> host_output1_;
+    // Host buffers (will be used for conversion if needed, or stored as bytes)
+    std::vector<char> host_output0_raw_;
+    std::vector<char> host_output1_raw_;
 
     // Helper for sigmoid
     inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
