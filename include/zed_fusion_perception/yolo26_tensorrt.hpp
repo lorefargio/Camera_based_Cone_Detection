@@ -23,6 +23,8 @@ public:
     // High-performance: populates the d_mask_canvas on GPU
     void infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas);
 
+    cudaStream_t getStream() const { return stream_; }
+
 private:
     void loadEngine(const std::string& path);
     void allocateBuffers();

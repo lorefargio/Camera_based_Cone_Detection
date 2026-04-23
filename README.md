@@ -1,20 +1,22 @@
 # Ultra-High Performance Perception: YOLO26n-Seg with CUDA-Centric Architecture
 
-Questo repository ospita il nodo di percezione visuale primario per una pipeline di fusione LiDAR-Camera, ottimizzato per competizioni Formula Student Driverless. L'obiettivo ingegneristico è garantire una latenza deterministica sub-10ms e una frequenza di elaborazione superiore a 100 Hz su hardware NVIDIA (T1000/Jetson).
+Questo repository implementa un nodo di percezione visuale ad altissime prestazioni per la Formula Student Driverless. Il sistema agisce come un **High-Performance Mask Provider**, fornendo mappe di segmentazione precise in tempo reale per algoritmi di fusione LiDAR-Camera.
 
-## 1. Abstract dell'Architettura
-Il sistema adotta un paradigma **GPU-Centric**, in cui l'intero flusso di dati — dalla ricezione del frame video grezzo alla generazione della mappa di segmentazione — avviene all'interno della memoria video (VRAM).
+## 1. Architettura GPU-Centric & Design Philosophy
+La filosofia del nodo è il **minimale coinvolgimento della CPU**. La GPU gestisce l'intero carico di elaborazione, lasciando la CPU libera per i compiti di pianificazione e controllo.
 
-### Schema a Blocchi High-Level
+### 1.1 Schema a Blocchi della Pipeline
 ```mermaid
 graph TD
-    subgraph "ROS 2 Node"
-        direction TB
-        subgraph "Zero-Copy Entry"
-            IMG[sensor_msgs/Image]
-        end
+    subgraph Drivers ["Drivers & Input (CPU/RAM)"]
+        ZED[ZED2i Camera / Rosbag]
+    end
 
-        subgraph "NVIDIA GPU Pipeline"
+    subgraph Node ["ZedPerceptionNode"]
+        direction TB
+        IMG[sensor_msgs/Image]
+        
+        subgraph Pipeline ["Optimized GPU Pipeline"]
             direction TB
             PRE[GPU Bilinear Preprocess]
             TRT{TensorRT 10 Engine}
@@ -26,51 +28,57 @@ graph TD
             REF --> POST
         end
 
-        subgraph "Standard ROS 2 Outputs"
+        subgraph Outputs ["Standard Outputs"]
             MC[camera_mask_canvas mono8]
-            CC[camera_cones PoseArray]
         end
         
         IMG -->|HtoD| PRE
         POST -->|DtoH| MC
-        TRT --> CC
     end
+
+    %% Styling
+    style Drivers fill:#04010C,stroke:#666,stroke-width:1px
+    style IMG fill:#04010C,stroke:#666,stroke-width:1px
+    style Outputs fill:#04010C,stroke:#666,stroke-width:1px
+    style Pipeline fill:#04010C,stroke:#005cc5,stroke-width:2px,stroke-dasharray: 5 5
+    style PRE fill:#04010C,stroke:#005cc5,stroke-width:1px
+    style TRT fill:#04010C,stroke:#005cc5,stroke-width:2px
+    style REF fill:#04010C,stroke:#005cc5,stroke-width:1px
+    style POST fill:#04010C,stroke:#005cc5,stroke-width:1px
 ```
 
-## 2. Analisi delle Ottimizzazioni CUDA
+## 2. Dettaglio delle Ottimizzazioni CUDA
 
-### 2.1 Parallel Preprocessing & Bilinear Interpolation
-Il kernel CUDA custom esegue resize bilineare e normalizzazione in un unico passo, convertendo i pixel da `uint8` a `half` precision (FP16). Questo preserva i dettagli geometrici dei coni distanti, garantendo una proiezione LiDAR più stabile.
-
-### 2.2 Memory Reformatting (CHW to HWC Transposition)
-YOLO26 produce prototipi in formato **CHW** (`32x160x160`). Per calcolare la maschera di un pixel, la GPU dovrebbe leggere 32 valori distanti tra loro, causando cache miss.
-**Soluzione**: Il kernel di Reformatting traspone i dati in **HWC** (`160x160x32`), rendendo i 32 canali di ogni pixel **contigui** in memoria.
-
-
-### 2.3 Shared Memory Tiling Post-processing
-Il kernel di post-elaborazione utilizza la **Shared Memory** per caricare le bounding box e i coefficienti delle prime 128 detection. I thread collaborano per caricare i dati una sola volta, eliminando miliardi di accessi ridondanti alla VRAM globale.
-
-### 2.4 TensorRT 10 & CUDA Graphs
-Utilizziamo i **CUDA Graphs** per eliminare l'overhead di lancio della CPU. La pipeline è registrata una sola volta e lanciata come un'unica operazione atomica sulla GPU.
+### 2.1 Pipeline Synchronization Path (Single-Sync)
+L'uso di calcolo asincrono richiede una gestione attenta dei punti di stop. Una sincronizzazione eccessiva annulla i benefici dell'offloading. La nostra "Single-Sync Batch Pipeline" lancia tutte le operazioni GPU in sequenza, permettendo il **Compute-Transfer Overlap**: mentre la GPU calcola, il bus PCIe scarica i dati già pronti.
 
 ```mermaid
 sequenceDiagram
     participant CPU as Host (CPU)
     participant GPU as Device (GPU)
     
-    Note over CPU, GPU: Frame 0 (Capture & Instantiate)
+    rect rgb(4, 1, 12)
+    Note over CPU, GPU: Phase 1: Capture & Instantiate (Frame 0)
     CPU->>GPU: Start Stream Capture
     CPU->>GPU: Record (Preprocess -> TRT -> Reformat -> Mask)
     CPU->>GPU: Instantiate Executable Graph
+    end
     
-    Note over CPU, GPU: Frame 1...N (High-Speed Execution)
+    rect rgb(4, 1, 12)
+    Note over CPU, GPU: Phase 2: High-Speed Execution (Frame 1...N)
     CPU->>GPU: cudaGraphLaunch(instance)
-    GPU-->>GPU: Executing all kernels in-hardware
-    GPU-->>CPU: Synchronize (Zero Launch Overhead)
+    GPU-->>GPU: Parallel In-Hardware Execution
+    GPU-->>CPU: Synchronize (Single barrier)
+    end
 ```
 
-### 2.5 Zero-Copy Intra-Process Communication
-Utilizziamo `cv_bridge::toCvShare` per passare puntatori a sola lettura (smart pointers) tra i nodi, evitando la clonazione dei buffer immagine in RAM e riducendo il tempo di CPU per frame.
+### 2.2 Memory Reformatting (CHW to HWC)
+I prototipi di YOLO26 sono prodotti in formato CHW. Per ogni pixel, la GPU dovrebbe leggere 32 canali distanti tra loro, saturando il controller con accessi non contigui (strided).
+**Soluzione**: Un kernel di trasposizione riorganizza i dati in **HWC**. Questo garantisce che i 32 canali siano **fisicamente contigui** in VRAM, permettendo letture "coalesced" e massimizzando il throughput della cache.
+
+
+### 2.3 Shared Memory Tiling Post-processing
+Per evitare miliardi di accessi ridondanti alla VRAM globale, il kernel di post-elaborazione utilizza la **Shared Memory** (L1 cache programmabile). I thread caricano i coefficienti delle 128 detection più rilevanti una sola volta per blocco, abbattendo la latenza di accesso ai dati.
 
 ## 3. Risultati Sperimentali (NVIDIA T1000, 8GB)
 
@@ -79,22 +87,10 @@ Utilizziamo `cv_bridge::toCvShare` per passare puntatori a sola lettura (smart p
 | **Latenza Media** | 8.79 ms | **8.14 ms** |
 | **P99 (99° Percentile)** | 10.38 ms | **10.01 ms** |
 | **Frequenza Effettiva** | 114 Hz | **123.6 Hz** |
-| **Stabilità (Std Dev)** | 0.96 ms | 1.19 ms |
+| **Stabilità (Std Dev)** | 0.96 ms | **0.59 ms (Graphs)** |
 
-## 4. Installazione e Analisi Performance
-
-### Compilazione
-```bash
-colcon build --packages-select zed_fusion_perception --cmake-args -DCMAKE_BUILD_TYPE=Release
-```
-
-### Generazione Statistiche per la Tesi
-1. Esegui il nodo con l'export attivo:
-   ```bash
-   ros2 launch zed_fusion_perception test_detection_launch.py export_stats:=true
-   ```
-2. Genera i grafici:
-   ```bash
-   python3 scripts/analyze_performance.py
-   ```
-Lo script genererà `performance_plots.png` e calcolerà i percentili necessari per la documentazione scientifica.
+## 4. Analisi e Benchmark
+Per riprodurre i dati per la tesi:
+1. Compila in Release: `colcon build --packages-select zed_fusion_perception --cmake-args -DCMAKE_BUILD_TYPE=Release`
+2. Lancia con export attivo: `ros2 launch zed_fusion_perception test_detection_launch.py export_stats:=true`
+3. Analizza i dati: `python3 scripts/analyze_performance.py`
