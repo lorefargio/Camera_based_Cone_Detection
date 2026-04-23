@@ -7,6 +7,9 @@
 #include <cuda_runtime_api.h>
 #include "zed_fusion_perception/detected_cone.hpp"
 
+extern "C" void launch_preprocess(const uint8_t* src, float* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, cudaStream_t stream);
+extern "C" void launch_postprocess_mask(const float* output0, const float* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, cudaStream_t stream);
+
 class Yolo26nSeg {
 public:
     Yolo26nSeg(const std::string& engine_path, float conf_threshold = 0.5, float nms_threshold = 0.45);
@@ -14,13 +17,16 @@ public:
 
     // Runs inference and returns parsed detections with masks
     std::vector<DetectedCone> infer(const cv::Mat& bgr_image);
+    
+    // High-performance: returns only the mask canvas ID map on GPU
+    void infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas);
 
 private:
     void loadEngine(const std::string& path);
     void allocateBuffers();
     
-    // Prepares the image (Resize, BGR2RGB, HWC2CHW, Normalize)
-    void preprocess(const cv::Mat& src, float* dst);
+    // Prepares the image (GPU accelerated)
+    void preprocess_gpu(const cv::Mat& src);
     
     // Handles NMS and Mask Generation
     std::vector<DetectedCone> postprocess(float* output0, float* output1, const cv::Size& original_size);
@@ -31,6 +37,7 @@ private:
     std::unique_ptr<nvinfer1::IExecutionContext> context_;
     cudaStream_t stream_;
     void* buffers_[3]; // Input, Output0, Output1
+    void* d_src_image_; // Raw image on GPU
     
     float conf_threshold_;
     float nms_threshold_;
@@ -40,12 +47,11 @@ private:
     nvinfer1::Dims output0_dims_;
     nvinfer1::Dims output1_dims_;
 
-    // Tensor names (Required for TensorRT 10 enqueueV3)
+    // Tensor names
     std::string input_name_;
     std::string output0_name_;
     std::string output1_name_;
 
-    std::vector<float> host_input_batch_;
     std::vector<float> host_output0_;
     std::vector<float> host_output1_;
 
