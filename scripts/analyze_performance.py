@@ -14,13 +14,13 @@ def analyze(csv_file):
     # Calculate stats
     avg_latency = df['latency_ms'].mean()
     p99_latency = np.percentile(df['latency_ms'], 99)
-    std::_latency = df['latency_ms'].std()
+    std_latency = df['latency_ms'].std()
     avg_hz = df['hz'].mean()
 
     print(f"--- Performance Analysis ---")
     print(f"Average Latency: {avg_latency:.2f} ms")
     print(f"99th Percentile: {p99_latency:.2f} ms")
-    print(f"Std Deviation:  {std._latency:.2f} ms")
+    print(f"Std Deviation:  {std_latency:.2f} ms")
     print(f"Average FPS:    {avg_hz:.1f} Hz")
     print(f"----------------------------")
 
@@ -48,5 +48,5 @@ def analyze(csv_file):
     plt.show()
 
 if __name__ == "__main__":
-    file = 'perception_stats.csv' if len(sys.argv) < 2 else sys.argv[1]
+    file = 'camera_stats.csv' if len(sys.argv) < 2 else sys.argv[1]
     analyze(file)
