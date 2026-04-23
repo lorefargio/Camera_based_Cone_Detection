@@ -15,10 +15,12 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     // Initialize YOLO
     yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold);
 
-    // Subscriptions
-    image_sub_ = this->create_subscription<sensor_msgs::msg::Image>("/zed/zed_node/rgb/color/rect/image", 10, std::bind(&ZedPerceptionNode::imageCallback, this, std::placeholders::_1));
+    // Subscriptions - Aggiornati per corrispondere alla ROSBAG
+    image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+        "/zed/zed_node/rgb/color/rect/image", 10, std::bind(&ZedPerceptionNode::imageCallback, this, std::placeholders::_1));
 
-    info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>( "/zed2i/zed_node/rgb/camera_info", 10, std::bind(&ZedPerceptionNode::cameraInfoCallback, this, std::placeholders::_1));
+    info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        "/zed/zed_node/rgb/color/rect/camera_info", 10, std::bind(&ZedPerceptionNode::cameraInfoCallback, this, std::placeholders::_1));
 
     // Publishers
     debug_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/debug_image", 10);
@@ -28,10 +30,12 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
 }
 
 void ZedPerceptionNode::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+    RCLCPP_INFO_ONCE(this->get_logger(), "Camera Info received!");
     camera_info_ = *msg;
 }
 
 void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr msg) {
+    RCLCPP_INFO_ONCE(this->get_logger(), "First image received!");
     auto start_total = std::chrono::high_resolution_clock::now();
     
     if (camera_info_.k.empty()) {
@@ -41,33 +45,26 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
 
     cv_bridge::CvImagePtr cv_ptr;
     try {
-        // Use toCvShare to avoid copying if possible (Intra-process)
         cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
     } catch (cv_bridge::Exception& e) {
         RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
         return;
     }
 
-    // Allocate GPU buffer for mask canvas if needed
     static uint8_t* d_mask_canvas = nullptr;
     static size_t canvas_size = 0;
     size_t current_size = cv_ptr->image.total();
     if (d_mask_canvas == nullptr || canvas_size != current_size) {
         if (d_mask_canvas) cudaFree(d_mask_canvas);
         canvas_size = current_size;
-        cudaMalloc(&d_mask_canvas, canvas_size);
+        cudaMalloc(reinterpret_cast<void**>(&d_mask_canvas), canvas_size);
     }
 
-    // 1. Run YOLO26n High-Performance Inference (directly to GPU canvas)
     auto start_yolo = std::chrono::high_resolution_clock::now();
     yolo_->infer_to_canvas(cv_ptr->image, d_mask_canvas);
-    
-    // Also get detections for other publishers (Markers, etc.)
-    // Note: This could be optimized further if Markers aren't always needed
     auto detections = yolo_->infer(cv_ptr->image); 
     auto end_yolo = std::chrono::high_resolution_clock::now();
     
-    // 2. Publish results
     geometry_msgs::msg::PoseArray camera_cones_msg;
     camera_cones_msg.header = msg->header;
     visualization_msgs::msg::MarkerArray markers;
@@ -95,7 +92,6 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     camera_cones_pub_->publish(camera_cones_msg);
     marker_pub_->publish(markers);
 
-    // 3. Publish Mask Canvas (Copy from GPU to ROS Message)
     auto mask_msg = std::make_unique<sensor_msgs::msg::Image>();
     mask_msg->header = msg->header;
     mask_msg->height = cv_ptr->image.rows;
@@ -110,14 +106,11 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     double yolo_ms = std::chrono::duration<double, std::milli>(end_yolo - start_yolo).count();
     double total_ms = std::chrono::duration<double, std::milli>(end_total - start_total).count();
     
-    RCLCPP_DEBUG(this->get_logger(), "Inference: %.2f ms, Total: %.2f ms", yolo_ms, total_ms);
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Inference: %.2f ms, Total: %.2f ms (Detections: %zu)", yolo_ms, total_ms, detections.size());
 }
 
 geometry_msgs::msg::Point ZedPerceptionNode::projectTo3D(const cv::Point2f& center_2d, double depth) {
     geometry_msgs::msg::Point p;
-    // Pinhole camera model
-    // x = (u - cx) * z / fx
-    // y = (v - cy) * z / fy
     double fx = camera_info_.k[0];
     double cx = camera_info_.k[2];
     double fy = camera_info_.k[4];
