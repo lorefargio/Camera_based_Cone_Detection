@@ -46,20 +46,6 @@ Il kernel CUDA custom esegue resize bilineare e normalizzazione in un unico pass
 YOLO26 produce prototipi in formato **CHW** (`32x160x160`). Per calcolare la maschera di un pixel, la GPU dovrebbe leggere 32 valori distanti tra loro, causando cache miss.
 **Soluzione**: Il kernel di Reformatting traspone i dati in **HWC** (`160x160x32`), rendendo i 32 canali di ogni pixel **contigui** in memoria.
 
-```mermaid
-graph LR
-    subgraph "CHW Layout (Standard)"
-        C1[Chan 0] -.-> C2[Chan 1] -.-> C3[Chan 31]
-        Note over C1,C3: Distanti 25.600 byte l'uno dall'altro
-    end
-    
-    subgraph "HWC Layout (Optimized)"
-        P1[Pixel 0,0: 32ch contigui]
-        P2[Pixel 0,1: 32ch contigui]
-    end
-    
-    CHW -->|Reformatting Kernel| HWC
-```
 
 ### 2.3 Shared Memory Tiling Post-processing
 Il kernel di post-elaborazione utilizza la **Shared Memory** per caricare le bounding box e i coefficienti delle prime 128 detection. I thread collaborano per caricare i dati una sola volta, eliminando miliardi di accessi ridondanti alla VRAM globale.

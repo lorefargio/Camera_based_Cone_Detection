@@ -130,12 +130,19 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     double total_ms = std::chrono::duration<double, std::milli>(end_node - start_node).count();
     double hz = 1000.0 / total_ms;
 
-    if (export_stats_ && stats_file_.is_open()) {
+    static int iter_count = 0;
+    iter_count++;
+
+    if (export_stats_ && stats_file_.is_open() && iter_count > 1) {
         auto now = this->get_clock()->now();
         stats_file_ << now.nanoseconds() << "," << total_ms << "," << hz << "," << detections.size() << "\n";
     }
 
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500, "LATENCY: %.2f ms | FREQUENCY: %.2f Hz", total_ms, hz);
+    if (iter_count > 1) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500, "LATENCY: %.2f ms | FREQUENCY: %.2f Hz", total_ms, hz);
+    } else {
+        RCLCPP_INFO(this->get_logger(), "First iteration skipped from stats (Warmup/Graph Capture)");
+    }
 }
 
 geometry_msgs::msg::Point ZedPerceptionNode::projectTo3D(const cv::Point2f& center_2d, double depth) {
