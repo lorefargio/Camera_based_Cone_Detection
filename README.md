@@ -8,10 +8,6 @@ La filosofia del nodo è il **minimale coinvolgimento della CPU**. La GPU gestis
 ### 1.1 Schema a Blocchi della Pipeline
 ```mermaid
 graph TD
-    subgraph Drivers ["Drivers & Input (CPU/RAM)"]
-        ZED[ZED2i Camera / Rosbag]
-    end
-
     subgraph Node ["ZedPerceptionNode"]
         direction TB
         IMG[sensor_msgs/Image]
@@ -37,7 +33,6 @@ graph TD
     end
 
     %% Styling
-    style Drivers fill:#04010C,stroke:#666,stroke-width:1px
     style IMG fill:#04010C,stroke:#666,stroke-width:1px
     style Outputs fill:#04010C,stroke:#666,stroke-width:1px
     style Pipeline fill:#04010C,stroke:#005cc5,stroke-width:2px,stroke-dasharray: 5 5
@@ -84,10 +79,10 @@ Per evitare miliardi di accessi ridondanti alla VRAM globale, il kernel di post-
 
 | Metrica | FP32 Input/Output | **FP16 Nativo (Ottimizzato)** |
 | :--- | :--- | :--- |
-| **Latenza Media** | 8.79 ms | **8.14 ms** |
-| **P99 (99° Percentile)** | 10.38 ms | **10.01 ms** |
-| **Frequenza Effettiva** | 114 Hz | **123.6 Hz** |
-| **Stabilità (Std Dev)** | 0.96 ms | **0.59 ms (Graphs)** |
+| **Latenza Media** | 9.74 ms | **9.10 ms** |
+| **P99 (99° Percentile)** | 13.27 ms | **13.64 ms** |
+| **Frequenza Effettiva** | 104 Hz | **112 Hz** |
+| **Stabilità (Std Dev)** | 1.25 ms | **1.12 ms (Graphs)** |
 
 ## 4. Analisi e Benchmark
 Per riprodurre i dati per la tesi:
