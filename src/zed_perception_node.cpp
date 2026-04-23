@@ -7,7 +7,7 @@
 ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     : Node("zed_perception_node", options) {
     
-    std::string engine_path = this->declare_parameter("engine_path", "models/yolo26_fp16.engine");
+    std::string engine_path = this->declare_parameter("engine_path", "models/yolo26n-seg.engine");
     float conf_threshold = this->declare_parameter("conf_threshold", 0.5);
     float nms_threshold = this->declare_parameter("nms_threshold", 0.45);
     publish_debug_ = this->declare_parameter("publish_debug", false);
@@ -15,21 +15,19 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
 
     yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold);
 
-    // Startup Banner
     RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
     RCLCPP_INFO(this->get_logger(), " ZED PERCEPTION NODE INITIALIZED");
     RCLCPP_INFO(this->get_logger(), " - Model: YOLO26n-Seg (End-to-End)");
-    RCLCPP_INFO(this->get_logger(), " - Inference: TensorRT 10.x");
-    RCLCPP_INFO(this->get_logger(), " - GPU Acceleration: CUDA Enabled");
+    RCLCPP_INFO(this->get_logger(), " - Inference: TensorRT 10.x + CUDA Graphs");
+    RCLCPP_INFO(this->get_logger(), " - Optimization: Zero-Copy (toCvShare) Enabled");
     RCLCPP_INFO(this->get_logger(), " - Preprocessing: GPU Bilinear Resize");
-    RCLCPP_INFO(this->get_logger(), " - Postprocessing: GPU Shared Memory Tiling");
+    RCLCPP_INFO(this->get_logger(), " - Postprocessing: Shared Memory HWC Reformatting");
     RCLCPP_INFO(this->get_logger(), " - Stats Export: %s", export_stats_ ? "ENABLED" : "DISABLED");
     RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
 
     if (export_stats_) {
         stats_file_.open("camera_stats.csv");
         stats_file_ << "timestamp,latency_ms,hz,detections\n";
-        RCLCPP_INFO(this->get_logger(), "Performance stats will be exported to perception_stats.csv");
     }
 
     image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
@@ -57,9 +55,10 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
         return;
     }
 
-    cv_bridge::CvImagePtr cv_ptr;
+    cv_bridge::CvImageConstPtr cv_ptr;
     try {
-        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        // ZERO-COPY: toCvShare avoids copying the buffer if it's already in the same process
+        cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::BGR8);
     } catch (cv_bridge::Exception& e) {
         RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
         return;
@@ -73,8 +72,12 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
         cudaMalloc(reinterpret_cast<void**>(&d_mask_canvas), canvas_size);
     }
 
-    auto detections = yolo_->infer(cv_ptr->image);
+    // --- CUDA GRAPH PIPELINE ---
+    // infer_to_canvas runs the captured Graph (Preprocess -> Inference -> Reformat -> Mask)
     yolo_->infer_to_canvas(cv_ptr->image, d_mask_canvas);
+    
+    // Get detections on host for publishing (uses already computed data in GPU output buffer)
+    auto detections = yolo_->infer(cv_ptr->image);
 
     geometry_msgs::msg::PoseArray camera_cones_msg;
     camera_cones_msg.header = msg->header;
@@ -85,6 +88,7 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     }
     camera_cones_pub_->publish(camera_cones_msg);
 
+    // 3. Publish Mask Canvas (Copy from GPU to ROS Message)
     auto mask_msg = std::make_unique<sensor_msgs::msg::Image>();
     mask_msg->header = msg->header;
     mask_msg->height = cv_ptr->image.rows;
@@ -93,10 +97,10 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     mask_msg->step = mask_msg->width;
     mask_msg->data.resize(canvas_size);
     cudaMemcpy(mask_msg->data.data(), d_mask_canvas, canvas_size, cudaMemcpyDeviceToHost);
-    mask_canvas_pub_->publish(*mask_msg);
+    mask_canvas_pub_->publish(std::move(mask_msg));
 
     if (publish_debug_) {
-        cv::Mat raw_mask(mask_msg->height, mask_msg->width, CV_8U, mask_msg->data.data());
+        cv::Mat raw_mask(cv_ptr->image.rows, cv_ptr->image.cols, CV_8U, (void*)mask_msg->data.data());
         auto get_class_color = [](int class_id) {
             if (class_id == 0) return cv::Scalar(255, 0, 0);
             if (class_id == 1) return cv::Scalar(0, 255, 255);
@@ -105,6 +109,7 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
             if (class_id == 4) return cv::Scalar(128, 128, 128);
             return cv::Scalar(255, 255, 255);
         };
+
         if (debug_pub_->get_subscription_count() > 0) {
             cv::Mat debug_img = cv_ptr->image.clone();
             for (const auto& det : detections) {
@@ -112,6 +117,7 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
             }
             debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", debug_img).toImageMsg());
         }
+
         if (debug_mask_pub_->get_subscription_count() > 0) {
             cv::Mat color_mask = cv::Mat::zeros(raw_mask.size(), CV_8UC3);
             for (size_t i = 0; i < detections.size(); ++i) {

@@ -17,49 +17,49 @@ public:
     Yolo26nSeg(const std::string& engine_path, float conf_threshold = 0.5, float nms_threshold = 0.45);
     ~Yolo26nSeg();
 
-    // Runs inference and returns parsed detections with masks
+    // Standard inference (returns detections on CPU)
     std::vector<DetectedCone> infer(const cv::Mat& bgr_image);
     
-    // High-performance: returns only the mask canvas ID map on GPU
+    // High-performance: populates the d_mask_canvas on GPU
     void infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas);
 
 private:
     void loadEngine(const std::string& path);
     void allocateBuffers();
-    
-    // Prepares the image (GPU accelerated)
     void preprocess_gpu(const cv::Mat& src);
-    
-    // Handles NMS and Mask Generation
     std::vector<DetectedCone> postprocess(void* output0, void* output1, const cv::Size& original_size);
+
+    // CUDA Graph management
+    void initGraph(const cv::Mat& sample_img, uint8_t* d_mask_canvas);
 
     // Cuda resources
     std::unique_ptr<nvinfer1::IRuntime> runtime_;
     std::unique_ptr<nvinfer1::ICudaEngine> engine_;
     std::unique_ptr<nvinfer1::IExecutionContext> context_;
     cudaStream_t stream_;
-    void* buffers_[3]; // Input, Output0, Output1
-    void* d_src_image_; // Raw image on GPU
-    void* d_proto_reformatted_; // Reformatted prototypes (HWC)
+    void* buffers_[3]; 
+    void* d_src_image_; 
+    void* d_proto_reformatted_; 
     
+    // CUDA Graph members
+    cudaGraph_t graph_;
+    cudaGraphExec_t instance_;
+    bool graph_initialized_;
+
     float conf_threshold_;
     float nms_threshold_;
     bool is_fp16_;
 
-    // Tensor shapes
     nvinfer1::Dims input_dims_;
     nvinfer1::Dims output0_dims_;
     nvinfer1::Dims output1_dims_;
 
-    // Tensor names
     std::string input_name_;
     std::string output0_name_;
     std::string output1_name_;
 
-    // Host buffers
     std::vector<char> host_output0_raw_;
     std::vector<char> host_output1_raw_;
 
-    // Helper for sigmoid
     inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 };
