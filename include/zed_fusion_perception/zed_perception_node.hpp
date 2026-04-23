@@ -26,6 +26,7 @@ private:
     
     std::unique_ptr<Yolo26nSeg> yolo_;
     sensor_msgs::msg::CameraInfo camera_info_;
+    bool publish_debug_;
     
     geometry_msgs::msg::Point projectTo3D(const cv::Point2f& center_2d, double depth);
 };

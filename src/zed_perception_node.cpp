@@ -11,6 +11,7 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     std::string engine_path = this->declare_parameter("engine_path", "models/yolo26n-seg.engine");
     float conf_threshold = this->declare_parameter("conf_threshold", 0.5);
     float nms_threshold = this->declare_parameter("nms_threshold", 0.45);
+    publish_debug_ = this->declare_parameter("publish_debug", false);
 
     // Initialize YOLO
     yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold);
@@ -92,6 +93,7 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     camera_cones_pub_->publish(camera_cones_msg);
     marker_pub_->publish(markers);
 
+    // 3. Publish Mask Canvas (Copy from GPU to ROS Message)
     auto mask_msg = std::make_unique<sensor_msgs::msg::Image>();
     mask_msg->header = msg->header;
     mask_msg->height = cv_ptr->image.rows;
@@ -101,6 +103,21 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     mask_msg->data.resize(canvas_size);
     cudaMemcpy(mask_msg->data.data(), d_mask_canvas, canvas_size, cudaMemcpyDeviceToHost);
     mask_canvas_pub_->publish(std::move(mask_msg));
+
+    // 4. Publish Debug Image (Only if enabled and someone is watching)
+    if (publish_debug_ && debug_pub_->get_subscription_count() > 0) {
+        cv::Mat debug_img = cv_ptr->image.clone();
+        for (const auto& det : detections) {
+            cv::Scalar color(0, 255, 0);
+            if (det.class_id == 0) color = cv::Scalar(255, 0, 0); // Blue
+            else if (det.class_id == 1) color = cv::Scalar(0, 255, 255); // Yellow
+            else if (det.class_id == 2) color = cv::Scalar(0, 165, 255); // Orange
+
+            cv::circle(debug_img, det.center_2d, 5, color, -1);
+        }
+        auto debug_msg = cv_bridge::CvImage(msg->header, "bgr8", debug_img).toImageMsg();
+        debug_pub_->publish(*debug_msg);
+    }
 
     auto end_total = std::chrono::high_resolution_clock::now();
     double yolo_ms = std::chrono::duration<double, std::milli>(end_yolo - start_yolo).count();
