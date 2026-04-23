@@ -2,7 +2,6 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
 
 ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     : Node("zed_perception_node", options) {
@@ -24,7 +23,6 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     debug_mask_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/debug_mask_canvas", 10);
     mask_canvas_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/camera_mask_canvas", 10);
     camera_cones_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/perception/camera_cones", 10);
-    marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/perception/markers", 10);
 }
 
 void ZedPerceptionNode::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
@@ -61,29 +59,13 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
 
     geometry_msgs::msg::PoseArray camera_cones_msg;
     camera_cones_msg.header = msg->header;
-    visualization_msgs::msg::MarkerArray markers;
 
-    for (size_t i = 0; i < detections.size(); ++i) {
-        const auto& det = detections[i];
+    for (const auto& det : detections) {
         geometry_msgs::msg::Pose pose;
         pose.position = projectTo3D(det.center_2d, 5.0); 
         camera_cones_msg.poses.push_back(pose);
-
-        visualization_msgs::msg::Marker marker;
-        marker.header = msg->header;
-        marker.ns = "camera_cones";
-        marker.id = i;
-        marker.type = visualization_msgs::msg::Marker::CYLINDER;
-        marker.pose.position = pose.position;
-        marker.scale.x = 0.228; marker.scale.y = 0.228; marker.scale.z = 0.325;
-        
-        if (det.class_id == 0) { marker.color.b = 1.0; marker.color.a = 1.0; }
-        else if (det.class_id == 1) { marker.color.r = 1.0; marker.color.g = 1.0; marker.color.a = 1.0; }
-        else if (det.class_id == 2) { marker.color.r = 1.0; marker.color.g = 0.5; marker.color.a = 1.0; }
-        markers.markers.push_back(marker);
     }
     camera_cones_pub_->publish(camera_cones_msg);
-    marker_pub_->publish(markers);
 
     auto mask_msg = std::make_unique<sensor_msgs::msg::Image>();
     mask_msg->header = msg->header;
@@ -94,33 +76,34 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     mask_msg->data.resize(canvas_size);
     cudaMemcpy(mask_msg->data.data(), d_mask_canvas, canvas_size, cudaMemcpyDeviceToHost);
     
-    // Publichiamo la maschera RAW per il nodo di Fusion
     mask_canvas_pub_->publish(*mask_msg);
 
-    // 4. Debug Image & Debug Mask
     if (publish_debug_) {
-        // Pubblica Debug Image (Centri coni)
+        cv::Mat raw_mask(mask_msg->height, mask_msg->width, CV_8U, mask_msg->data.data());
+        
+        auto get_class_color = [](int class_id) {
+            if (class_id == 0) return cv::Scalar(255, 0, 0);   // Blue
+            if (class_id == 1) return cv::Scalar(0, 255, 255); // Yellow
+            if (class_id == 2) return cv::Scalar(0, 165, 255); // Orange
+            if (class_id == 3) return cv::Scalar(0, 0, 255);   // Big Orange (Red)
+            if (class_id == 4) return cv::Scalar(128, 128, 128); // Fallen (Gray)
+            return cv::Scalar(255, 255, 255); // Default White
+        };
+
         if (debug_pub_->get_subscription_count() > 0) {
             cv::Mat debug_img = cv_ptr->image.clone();
             for (const auto& det : detections) {
-                cv::Scalar color(0, 255, 0);
-                if (det.class_id == 0) color = cv::Scalar(255, 0, 0);
-                else if (det.class_id == 1) color = cv::Scalar(0, 255, 255);
-                else if (det.class_id == 2) color = cv::Scalar(0, 165, 255);
-                cv::circle(debug_img, det.center_2d, 5, color, -1);
+                cv::circle(debug_img, det.center_2d, 5, get_class_color(det.class_id), -1);
             }
             debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", debug_img).toImageMsg());
         }
 
-        // Pubblica Debug Mask (Colorata per occhio umano)
         if (debug_mask_pub_->get_subscription_count() > 0) {
-            cv::Mat raw_mask(mask_msg->height, mask_msg->width, CV_8U, mask_msg->data.data());
-            cv::Mat color_mask;
-            // Scaliamo i valori (es: ID 1 diventa 50, ID 2 diventa 100...) e applichiamo mappa colori
-            raw_mask.convertTo(color_mask, CV_8U, 25); 
-            cv::applyColorMap(color_mask, color_mask, cv::COLORMAP_JET);
-            // Forza a nero dove il valore originale era 0 (background)
-            color_mask.setTo(cv::Scalar(0, 0, 0), raw_mask == 0);
+            cv::Mat color_mask = cv::Mat::zeros(raw_mask.size(), CV_8UC3);
+            for (size_t i = 0; i < detections.size(); ++i) {
+                uint8_t id = static_cast<uint8_t>(i + 1);
+                color_mask.setTo(get_class_color(detections[i].class_id), raw_mask == id);
+            }
             debug_mask_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", color_mask).toImageMsg());
         }
     }
@@ -128,7 +111,6 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     auto end_node = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(end_node - start_node).count();
     double hz = 1000.0 / total_ms;
-
     RCLCPP_INFO(this->get_logger(), "LATENCY: %.2f ms | FREQUENCY: %.2f Hz | CONES: %zu", 
                 total_ms, hz, detections.size());
 }
