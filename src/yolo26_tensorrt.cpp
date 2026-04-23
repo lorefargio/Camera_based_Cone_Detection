@@ -98,14 +98,8 @@ std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {
 }
 
 void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas) {
-  preprocess_gpu(bgr_image);
-
-  context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
-  context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
-  context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
-
-  context_->enqueueV3(stream_);
-
+  // Nota: l'inferenza è già stata fatta da infer(). 
+  // Qui lanciamo solo il kernel di post-processing sulla GPU.
   launch_postprocess_mask((float*)buffers_[1], (float*)buffers_[2], d_mask_canvas, 
                           bgr_image.cols, bgr_image.rows, conf_threshold_, stream_);
 }

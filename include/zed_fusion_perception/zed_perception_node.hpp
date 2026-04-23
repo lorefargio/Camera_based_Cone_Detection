@@ -20,6 +20,7 @@ private:
     
     // Publishers
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr mask_canvas_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr camera_cones_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
