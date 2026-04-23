@@ -72,40 +72,38 @@ void Yolo26nSeg::allocateBuffers() {
   cudaMalloc(&buffers_[2], get_size(output1_dims_) * element_size);
   cudaMalloc(&d_src_image_, 2208 * 1242 * 4); 
   cudaMalloc(&d_proto_reformatted_, get_size(output1_dims_) * element_size);
-
   host_output0_raw_.resize(get_size(output0_dims_) * element_size);
-  host_output1_raw_.resize(get_size(output1_dims_) * element_size);
 }
 
 void Yolo26nSeg::initGraph(const cv::Mat& sample_img, uint8_t* d_mask_canvas) {
-  // Capture the entire GPU pipeline into a CUDA Graph
-  cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal);
-  
-  // 1. Preprocess
-  launch_preprocess((uint8_t*)d_src_image_, buffers_[0], sample_img.cols, sample_img.rows, input_dims_.d[3], input_dims_.d[2], sample_img.channels(), is_fp16_, stream_);
-  
-  // 2. Inference Bindings
+  // WARMUP: Execute once before capture to let TRT initialize internal state
   context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
   context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
   context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
+  context_->enqueueV3(stream_);
+  cudaStreamSynchronize(stream_);
+
+  // START CAPTURE
+  cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal);
   
-  // 3. TensorRT Enqueue
+  launch_preprocess((uint8_t*)d_src_image_, buffers_[0], sample_img.cols, sample_img.rows, input_dims_.d[3], input_dims_.d[2], sample_img.channels(), is_fp16_, stream_);
+  
+  // Re-bind (even if already done, capture needs to see the call)
+  context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
+  context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
+  context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
   context_->enqueueV3(stream_);
   
-  // 4. Reformat Prototypes
   launch_reformat_prototypes(buffers_[2], d_proto_reformatted_, 160, 160, 32, is_fp16_, stream_);
-  
-  // 5. Postprocess Mask Canvas
   launch_postprocess_mask(buffers_[1], d_proto_reformatted_, d_mask_canvas, sample_img.cols, sample_img.rows, conf_threshold_, is_fp16_, stream_);
   
   cudaStreamEndCapture(stream_, &graph_);
-  cudaGraphInstantiate(&instance_, graph_, NULL, NULL, 0);
+  cudaGraphInstantiate(&instance_, graph_, 0);
   graph_initialized_ = true;
   std::cout << "[CUDA] CUDA Graph captured and instantiated successfully." << std::endl;
 }
 
 void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas) {
-  // Copy image to GPU (HtoD is usually outside the graph as size might change, but here we assume fixed)
   size_t src_size = bgr_image.total() * bgr_image.elemSize();
   cudaMemcpyAsync(d_src_image_, bgr_image.data, src_size, cudaMemcpyHostToDevice, stream_);
 
@@ -113,16 +111,12 @@ void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canva
     initGraph(bgr_image, d_mask_canvas);
   }
   
-  // Launch the entire recorded pipeline with zero CPU overhead
   cudaGraphLaunch(instance_, stream_);
-  
-  // DtoH for output0 is still needed if infer() is called, but here we just sync for the canvas
   cudaStreamSynchronize(stream_);
 }
 
 std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {
-  // For standard infer, we still need detections on host. 
-  // Since infer_to_canvas already ran the graph, the data is already in buffers_[1]
+  // buffers_[1] already contains output0 after cudaGraphLaunch in infer_to_canvas
   cudaMemcpyAsync(host_output0_raw_.data(), buffers_[1], host_output0_raw_.size(), cudaMemcpyDeviceToHost, stream_);
   cudaStreamSynchronize(stream_);
   return postprocess(host_output0_raw_.data(), nullptr, bgr_image.size());

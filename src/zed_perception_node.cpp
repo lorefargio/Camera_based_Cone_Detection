@@ -26,7 +26,7 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
 
     if (export_stats_) {
-        stats_file_.open("camera_stats.csv");
+        stats_file_.open("perception_stats.csv");
         stats_file_ << "timestamp,latency_ms,hz,detections\n";
     }
 
@@ -57,7 +57,6 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
 
     cv_bridge::CvImageConstPtr cv_ptr;
     try {
-        // ZERO-COPY: toCvShare avoids copying the buffer if it's already in the same process
         cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::BGR8);
     } catch (cv_bridge::Exception& e) {
         RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
@@ -72,11 +71,7 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
         cudaMalloc(reinterpret_cast<void**>(&d_mask_canvas), canvas_size);
     }
 
-    // --- CUDA GRAPH PIPELINE ---
-    // infer_to_canvas runs the captured Graph (Preprocess -> Inference -> Reformat -> Mask)
     yolo_->infer_to_canvas(cv_ptr->image, d_mask_canvas);
-    
-    // Get detections on host for publishing (uses already computed data in GPU output buffer)
     auto detections = yolo_->infer(cv_ptr->image);
 
     geometry_msgs::msg::PoseArray camera_cones_msg;
@@ -97,10 +92,10 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     mask_msg->step = mask_msg->width;
     mask_msg->data.resize(canvas_size);
     cudaMemcpy(mask_msg->data.data(), d_mask_canvas, canvas_size, cudaMemcpyDeviceToHost);
-    mask_canvas_pub_->publish(std::move(mask_msg));
-
+    
+    // CORREZIONE: Usiamo mask_msg PRIMA di muoverlo (std::move)
     if (publish_debug_) {
-        cv::Mat raw_mask(cv_ptr->image.rows, cv_ptr->image.cols, CV_8U, (void*)mask_msg->data.data());
+        cv::Mat raw_mask(mask_msg->height, mask_msg->width, CV_8U, (void*)mask_msg->data.data());
         auto get_class_color = [](int class_id) {
             if (class_id == 0) return cv::Scalar(255, 0, 0);
             if (class_id == 1) return cv::Scalar(0, 255, 255);
@@ -127,6 +122,9 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
             debug_mask_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", color_mask).toImageMsg());
         }
     }
+
+    // Ora possiamo pubblicare il messaggio originale
+    mask_canvas_pub_->publish(std::move(mask_msg));
 
     auto end_node = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(end_node - start_node).count();
