@@ -7,7 +7,7 @@
 ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     : Node("zed_perception_node", options) {
     
-    std::string engine_path = this->declare_parameter("engine_path", "models/yolo26n-seg.engine");
+    std::string engine_path = this->declare_parameter("engine_path", "models/yolo26_fp16.engine");
     float conf_threshold = this->declare_parameter("conf_threshold", 0.5);
     float nms_threshold = this->declare_parameter("nms_threshold", 0.45);
     publish_debug_ = this->declare_parameter("publish_debug", false);

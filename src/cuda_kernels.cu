@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 
-// --- TEMPLATE PREPROCESSING: FP32 and FP16 support ---
+// --- PREPROCESSING ---
 template <typename T>
 __global__ void preprocess_kernel_optimized(const uint8_t* src, T* dst, int src_w, int src_h, int dst_w, int dst_h, int channels) {
     int dx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -41,13 +41,26 @@ __global__ void preprocess_kernel_optimized(const uint8_t* src, T* dst, int src_
     }
 }
 
-// --- TEMPLATE POSTPROCESSING: FP32 and FP16 support ---
+// --- REFORMAT PROTOTYPES (CHW to HWC) ---
+template <typename T>
+__global__ void reformat_prototypes_kernel(const T* src, T* dst, int w, int h, int channels) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < w && y < h) {
+        for (int c = 0; c < channels; ++c) {
+            dst[(y * w + x) * channels + c] = src[c * (w * h) + (y * w + x)];
+        }
+    }
+}
+
+// --- POSTPROCESSING (Using Reformatted HWC Prototypes) ---
 #define MAX_DETECTIONS_SHARED 128
 
 template <typename T>
 __global__ void postprocess_mask_kernel_optimized(
     const T* output0,
-    const T* output1,
+    const T* output1_hwc, // Input is now HWC
     uint8_t* mask_canvas,
     int canvas_w, int canvas_h,
     float conf_threshold
@@ -65,10 +78,7 @@ __global__ void postprocess_mask_kernel_optimized(
         s_bboxes[i][2] = (float)row[2] * canvas_w / 640.0f;
         s_bboxes[i][3] = (float)row[3] * canvas_h / 640.0f;
         s_bboxes[i][4] = (float)row[4];
-        
-        for (int c = 0; c < 32; ++c) {
-            s_coeffs[i][c] = (float)row[6 + c];
-        }
+        for (int c = 0; c < 32; ++c) s_coeffs[i][c] = (float)row[6 + c];
     }
     __syncthreads();
 
@@ -82,7 +92,9 @@ __global__ void postprocess_mask_kernel_optimized(
 
     int px = x * 160 / canvas_w;
     int py = y * 160 / canvas_h;
-    int proto_offset = py * 160 + px;
+    
+    // Contiguous access to all 32 channels for this pixel!
+    const T* pixel_protos = output1_hwc + (py * 160 + px) * 32;
 
     for (int i = 0; i < MAX_DETECTIONS_SHARED; ++i) {
         float conf = s_bboxes[i][4];
@@ -92,9 +104,8 @@ __global__ void postprocess_mask_kernel_optimized(
             float mask_logit = 0.0f;
             #pragma unroll
             for (int c = 0; c < 32; ++c) {
-                mask_logit += s_coeffs[i][c] * (float)output1[c * 25600 + proto_offset];
+                mask_logit += s_coeffs[i][c] * (float)pixel_protos[c];
             }
-            
             if (1.0f / (1.0f + expf(-mask_logit)) > 0.5f) {
                 best_id = (uint8_t)(i + 1);
                 max_conf = conf;
@@ -107,17 +118,20 @@ __global__ void postprocess_mask_kernel_optimized(
 extern "C" void launch_preprocess(const uint8_t* src, void* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, bool is_fp16, cudaStream_t stream) {
     dim3 block(16, 16);
     dim3 grid((dst_w + block.x - 1) / block.x, (dst_h + block.y - 1) / block.y);
-    if (is_fp16)
-        preprocess_kernel_optimized<half><<<grid, block, 0, stream>>>(src, (half*)dst, src_w, src_h, dst_w, dst_h, channels);
-    else
-        preprocess_kernel_optimized<float><<<grid, block, 0, stream>>>(src, (float*)dst, src_w, src_h, dst_w, dst_h, channels);
+    if (is_fp16) preprocess_kernel_optimized<half><<<grid, block, 0, stream>>>(src, (half*)dst, src_w, src_h, dst_w, dst_h, channels);
+    else preprocess_kernel_optimized<float><<<grid, block, 0, stream>>>(src, (float*)dst, src_w, src_h, dst_w, dst_h, channels);
 }
 
-extern "C" void launch_postprocess_mask(const void* output0, const void* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, bool is_fp16, cudaStream_t stream) {
+extern "C" void launch_reformat_prototypes(const void* src, void* dst, int w, int h, int channels, bool is_fp16, cudaStream_t stream) {
+    dim3 block(16, 16);
+    dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
+    if (is_fp16) reformat_prototypes_kernel<half><<<grid, block, 0, stream>>>((half*)src, (half*)dst, w, h, channels);
+    else reformat_prototypes_kernel<float><<<grid, block, 0, stream>>>((float*)src, (float*)dst, w, h, channels);
+}
+
+extern "C" void launch_postprocess_mask(const void* output0, const void* output1_hwc, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, bool is_fp16, cudaStream_t stream) {
     dim3 block(16, 16);
     dim3 grid((canvas_w + block.x - 1) / block.x, (canvas_h + block.y - 1) / block.y);
-    if (is_fp16)
-        postprocess_mask_kernel_optimized<half><<<grid, block, 0, stream>>>((half*)output0, (half*)output1, mask_canvas, canvas_w, canvas_h, conf_threshold);
-    else
-        postprocess_mask_kernel_optimized<float><<<grid, block, 0, stream>>>((float*)output0, (float*)output1, mask_canvas, canvas_w, canvas_h, conf_threshold);
+    if (is_fp16) postprocess_mask_kernel_optimized<half><<<grid, block, 0, stream>>>((half*)output0, (half*)output1_hwc, mask_canvas, canvas_w, canvas_h, conf_threshold);
+    else postprocess_mask_kernel_optimized<float><<<grid, block, 0, stream>>>((float*)output0, (float*)output1_hwc, mask_canvas, canvas_w, canvas_h, conf_threshold);
 }

@@ -66,7 +66,7 @@ def generate_launch_description():
                               description='Percorso assoluto al file .mcap o alla cartella della rosbag'),
         
         DeclareLaunchArgument('engine_path', 
-                              default_value=os.path.join(pkg_share, 'models', 'best_trained_on_real_data.engine'), 
+                              default_value=os.path.join(pkg_share, 'models', 'yolo26_fp16.engine'), 
                               description='Percorso al file TensorRT engine'),
         
         DeclareLaunchArgument('publish_debug', default_value='true', 

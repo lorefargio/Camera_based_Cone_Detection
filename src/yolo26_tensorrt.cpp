@@ -23,12 +23,12 @@ Yolo26nSeg::~Yolo26nSeg() {
   cudaStreamDestroy(stream_);
   for (void *buf : buffers_) cudaFree(buf);
   cudaFree(d_src_image_);
+  cudaFree(d_proto_reformatted_);
 }
 
 void Yolo26nSeg::loadEngine(const std::string &path) {
   std::ifstream file(path, std::ios::binary);
   if (!file.good()) throw std::runtime_error("Failed to read engine file: " + path);
-
   file.seekg(0, file.end);
   size_t size = file.tellg();
   file.seekg(0, file.beg);
@@ -45,9 +45,7 @@ void Yolo26nSeg::loadEngine(const std::string &path) {
     std::string name = engine_->getIOTensorName(i);
     nvinfer1::Dims dims = engine_->getTensorShape(name.c_str());
     nvinfer1::DataType type = engine_->getTensorDataType(name.c_str());
-
     if (type == nvinfer1::DataType::kHALF) is_fp16_ = true;
-
     if (dims.nbDims == 4 && dims.d[1] == 3) {
       input_name_ = name; input_dims_ = dims;
     } else if (dims.nbDims == 3) {
@@ -56,7 +54,6 @@ void Yolo26nSeg::loadEngine(const std::string &path) {
       output1_name_ = name; output1_dims_ = dims;
     }
   }
-  std::cout << "[YOLO] Precision: " << (is_fp16_ ? "FP16" : "FP32") << std::endl;
 }
 
 void Yolo26nSeg::allocateBuffers() {
@@ -65,14 +62,12 @@ void Yolo26nSeg::allocateBuffers() {
     for (int i = 0; i < dims.nbDims; ++i) s *= dims.d[i];
     return s;
   };
-
   size_t element_size = is_fp16_ ? 2 : 4;
-
   cudaMalloc(&buffers_[0], get_size(input_dims_) * element_size);
   cudaMalloc(&buffers_[1], get_size(output0_dims_) * element_size);
   cudaMalloc(&buffers_[2], get_size(output1_dims_) * element_size);
-  
   cudaMalloc(&d_src_image_, 2208 * 1242 * 4); 
+  cudaMalloc(&d_proto_reformatted_, get_size(output1_dims_) * element_size);
 
   host_output0_raw_.resize(get_size(output0_dims_) * element_size);
   host_output1_raw_.resize(get_size(output1_dims_) * element_size);
@@ -81,45 +76,38 @@ void Yolo26nSeg::allocateBuffers() {
 void Yolo26nSeg::preprocess_gpu(const cv::Mat &src) {
   size_t src_size = src.total() * src.elemSize();
   cudaMemcpyAsync(d_src_image_, src.data, src_size, cudaMemcpyHostToDevice, stream_);
-  
-  launch_preprocess((uint8_t*)d_src_image_, buffers_[0], 
-                    src.cols, src.rows, input_dims_.d[3], input_dims_.d[2], 
-                    src.channels(), is_fp16_, stream_);
+  launch_preprocess((uint8_t*)d_src_image_, buffers_[0], src.cols, src.rows, input_dims_.d[3], input_dims_.d[2], src.channels(), is_fp16_, stream_);
 }
 
 std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {
   preprocess_gpu(bgr_image);
-
   context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
   context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
   context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
-
   if (!context_->enqueueV3(stream_)) return {};
-
   cudaMemcpyAsync(host_output0_raw_.data(), buffers_[1], host_output0_raw_.size(), cudaMemcpyDeviceToHost, stream_);
   cudaMemcpyAsync(host_output1_raw_.data(), buffers_[2], host_output1_raw_.size(), cudaMemcpyDeviceToHost, stream_);
   cudaStreamSynchronize(stream_);
-
   return postprocess(host_output0_raw_.data(), host_output1_raw_.data(), bgr_image.size());
 }
 
 void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas) {
-  launch_postprocess_mask(buffers_[1], buffers_[2], d_mask_canvas, 
-                          bgr_image.cols, bgr_image.rows, conf_threshold_, is_fp16_, stream_);
+  // 1. Reformat prototypes from CHW to HWC
+  launch_reformat_prototypes(buffers_[2], d_proto_reformatted_, 160, 160, 32, is_fp16_, stream_);
+  
+  // 2. Compute mask canvas using HWC prototypes
+  launch_postprocess_mask(buffers_[1], d_proto_reformatted_, d_mask_canvas, bgr_image.cols, bgr_image.rows, conf_threshold_, is_fp16_, stream_);
 }
 
 std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void* outB, const cv::Size &original_size) {
   std::vector<DetectedCone> detections;
   const int num_detections = 300;
   const int num_channels = 38;
-
   float scale_w = (float)original_size.width / 640.0f;
   float scale_h = (float)original_size.height / 640.0f;
-
   for (int i = 0; i < num_detections; ++i) {
     float score;
-    float row_data[6]; // x1, y1, x2, y2, conf, class
-
+    float row_data[6];
     if (is_fp16_) {
       half* row = (half*)outA + (i * num_channels);
       score = (float)row[4];
@@ -131,20 +119,11 @@ std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void* outB, const 
       if (score < conf_threshold_) continue;
       for (int j=0; j<6; ++j) row_data[j] = row[j];
     }
-
     DetectedCone det;
     det.class_id = (int)row_data[5];
     det.yolo_confidence = score;
-
-    float x1 = row_data[0] * scale_w;
-    float y1 = row_data[1] * scale_h;
-    float x2 = row_data[2] * scale_w;
-    float y2 = row_data[3] * scale_h;
-
-    float w = x2 - x1;
-    float h = y2 - y1;
-    det.center_2d = cv::Point2f(x1 + w / 2.0f, y1 + h / 2.0f);
-
+    det.center_2d = cv::Point2f(row_data[0] * scale_w + (row_data[2] * scale_w - row_data[0] * scale_w)/2.0f, 
+                                row_data[1] * scale_h + (row_data[3] * scale_h - row_data[1] * scale_h)/2.0f);
     detections.push_back(det);
   }
   return detections;

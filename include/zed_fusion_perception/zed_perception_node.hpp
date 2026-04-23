@@ -3,7 +3,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
+#include <fstream>
 #include "zed_fusion_perception/yolo26_tensorrt.hpp"
 
 class ZedPerceptionNode : public rclcpp::Node {

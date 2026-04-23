@@ -9,6 +9,7 @@
 #include "zed_fusion_perception/detected_cone.hpp"
 
 extern "C" void launch_preprocess(const uint8_t* src, void* dst, int src_w, int src_h, int dst_w, int dst_h, int channels, bool is_fp16, cudaStream_t stream);
+extern "C" void launch_reformat_prototypes(const void* src, void* dst, int w, int h, int channels, bool is_fp16, cudaStream_t stream);
 extern "C" void launch_postprocess_mask(const void* output0, const void* output1, uint8_t* mask_canvas, int canvas_w, int canvas_h, float conf_threshold, bool is_fp16, cudaStream_t stream);
 
 class Yolo26nSeg {
@@ -39,6 +40,7 @@ private:
     cudaStream_t stream_;
     void* buffers_[3]; // Input, Output0, Output1
     void* d_src_image_; // Raw image on GPU
+    void* d_proto_reformatted_; // Reformatted prototypes (HWC)
     
     float conf_threshold_;
     float nms_threshold_;
@@ -54,7 +56,7 @@ private:
     std::string output0_name_;
     std::string output1_name_;
 
-    // Host buffers (will be used for conversion if needed, or stored as bytes)
+    // Host buffers
     std::vector<char> host_output0_raw_;
     std::vector<char> host_output1_raw_;
 
