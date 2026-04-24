@@ -57,6 +57,7 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
 
     rclcpp_components_register_node(zed_fusion_core
       PLUGIN "ZedPerceptionNode"
+      EXECUTABLE zed_perception_component_runner
     )
 
     add_executable(zed_fusion_node src/main.cpp)

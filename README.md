@@ -73,10 +73,10 @@ Per evitare miliardi di accessi ridondanti alla VRAM globale, il kernel di post-
 
 | Metrica | FP32 Input/Output | **FP16 Nativo (Ottimizzato)** |
 | :--- | :--- | :--- |
-| **Latenza Media** | 9.74 ms | **9.10 ms** |
-| **P99 (99° Percentile)** | 13.27 ms | **13.64 ms** |
-| **Frequenza Effettiva** | 104 Hz | **112 Hz** |
-| **Stabilità (Std Dev)** | 1.25 ms | **1.12 ms (Graphs)** |
+| **Latenza Media** | 10.17 ms | **9.40 ms** |
+| **P99 (99° Percentile)** | 13.25 ms | **12.67 ms** |
+| **Frequenza Effettiva** | 98 Hz | **107 Hz** |
+| **Stabilità (Std Dev)** | 1.25 ms | **0.90 ms** |
 
 ## 4. Analisi e Benchmark
 Per riprodurre i dati per la tesi:

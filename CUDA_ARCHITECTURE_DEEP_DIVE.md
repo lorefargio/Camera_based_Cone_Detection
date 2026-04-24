@@ -41,5 +41,10 @@ Inizialmente, avevamo implementato i **CUDA Graphs** per ridurre l'overhead di l
 
 Abbiamo deciso di rimuoverli per ridurre la complessità del codice e migliorare la stabilità della pipeline asincrona. La perdita di performance è teoricamente non misurabile su architetture moderne, mentre il guadagno in manutenibilità è significativo.
 
-## 5. Conclusioni Architetturali
+## 5. Insight: Perché il passaggio a FP16 non è drastico?
+Dai test sperimentali, si nota che il passaggio da FP32 a FP16 porta un miglioramento della latenza contenuto (~7-8%). Questo fenomeno è spiegato da due fattori:
+1. **Memory Bound vs Compute Bound**: Molte fasi della pipeline (preprocess, reformat, postprocess) sono limitate dalla banda di memoria. Dimezzare la precisione di calcolo non accelera linearmente queste fasi se il collo di bottiglia è il caricamento dei dati.
+2. **Efficacia del layout HWC**: Avendo già ottimizzato il layout della memoria in FP32 risolvendo i cache miss, abbiamo rimosso la principale causa di inefficienza che solitamente rende l'FP32 molto più lento dell'FP16 su implementazioni meno curate.
+
+## 6. Conclusioni Architetturali
 L'efficienza di questa pipeline non deriva dalla "forza bruta" del calcolo, ma dalla **simmetria tra layout di memoria e gerarchia delle cache**. Trattare la GPU non come un processore generico, ma come un acceleratore guidato dal throughput di memoria, ci ha permesso di ottenere frequenze di processing superiori ai 100Hz su hardware entry-level (NVIDIA T1000), garantendo al contempo una latenza deterministica per il nodo di fusione.
