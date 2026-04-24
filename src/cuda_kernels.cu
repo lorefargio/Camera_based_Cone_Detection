@@ -67,6 +67,7 @@ __global__ void postprocess_mask_kernel_optimized(
 ) {
     __shared__ float s_coeffs[MAX_DETECTIONS_SHARED][32];
     __shared__ float s_bboxes[MAX_DETECTIONS_SHARED][5];
+    __shared__ uint8_t s_class_ids[MAX_DETECTIONS_SHARED];
 
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
     int threads_per_block = blockDim.x * blockDim.y;
@@ -78,6 +79,7 @@ __global__ void postprocess_mask_kernel_optimized(
         s_bboxes[i][2] = (float)row[2] * canvas_w / 640.0f;
         s_bboxes[i][3] = (float)row[3] * canvas_h / 640.0f;
         s_bboxes[i][4] = (float)row[4];
+        s_class_ids[i] = (uint8_t)row[5];
         for (int c = 0; c < 32; ++c) s_coeffs[i][c] = (float)row[6 + c];
     }
     __syncthreads();
@@ -107,7 +109,7 @@ __global__ void postprocess_mask_kernel_optimized(
                 mask_logit += s_coeffs[i][c] * (float)pixel_protos[c];
             }
             if (1.0f / (1.0f + expf(-mask_logit)) > 0.5f) {
-                best_id = (uint8_t)(i + 1);
+                best_id = s_class_ids[i] + 1;
                 max_conf = conf;
             }
         }

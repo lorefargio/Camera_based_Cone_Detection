@@ -43,6 +43,7 @@ graph TD
 ```
 
 ## 2. Dettaglio delle Ottimizzazioni CUDA
+Per un'analisi tecnica approfondita sulle scelte di architettura della memoria, layout HWC e gestione delle cache, consultare il documento: [CUDA Architecture Deep Dive](CUDA_ARCHITECTURE_DEEP_DIVE.md).
 
 ### 2.1 Pipeline Synchronization Path (Single-Sync)
 L'uso di calcolo asincrono richiede una gestione attenta dei punti di stop. Una sincronizzazione eccessiva annulla i benefici dell'offloading. La nostra "Single-Sync Batch Pipeline" lancia tutte le operazioni GPU in sequenza, permettendo il **Compute-Transfer Overlap**: mentre la GPU calcola, il bus PCIe scarica i dati già pronti.
@@ -53,15 +54,8 @@ sequenceDiagram
     participant GPU as Device (GPU)
     
     rect rgb(4, 1, 12)
-    Note over CPU, GPU: Phase 1: Capture & Instantiate (Frame 0)
-    CPU->>GPU: Start Stream Capture
-    CPU->>GPU: Record (Preprocess -> TRT -> Reformat -> Mask)
-    CPU->>GPU: Instantiate Executable Graph
-    end
-    
-    rect rgb(4, 1, 12)
-    Note over CPU, GPU: Phase 2: High-Speed Execution (Frame 1...N)
-    CPU->>GPU: cudaGraphLaunch(instance)
+    Note over CPU, GPU: High-Speed Execution (Frame 1...N)
+    CPU->>GPU: Launch Kernel Sequence (Preprocess -> TRT -> Reformat -> Mask)
     GPU-->>GPU: Parallel In-Hardware Execution
     GPU-->>CPU: Synchronize (Single barrier)
     end
@@ -89,3 +83,20 @@ Per riprodurre i dati per la tesi:
 1. Compila in Release: `colcon build --packages-select zed_fusion_perception --cmake-args -DCMAKE_BUILD_TYPE=Release`
 2. Lancia con export attivo: `ros2 launch zed_fusion_perception test_detection_launch.py export_stats:=true`
 3. Analizza i dati: `python3 scripts/analyze_performance.py`
+
+## 5. Integrazione Avanzata con Fusion Node 
+Per ottimizzare la pipeline di fusione LiDAR-Camera, sono state implementate le seguenti scelte sull'output del nodo:
+
+### 5.1 Semantic Encoding (O(1) Class Query)
+Il canvas della maschera contiene l'**ID della Classe YOLO**. Questo permette al Fusion Node di conoscere il colore del cono proiettato con un singolo accesso alla memoria:
+- `0`: Background
+- `1`: Blue Cone
+- `2`: Yellow Cone
+- `3`: Orange Cone
+- `4`: Big Orange Cone
+
+### 5.2 Timestamp Preservation
+Il campo `mask_msg->header.stamp` è garantito essere identico al timestamp dell'immagine raw in ingresso. Questo elimina problemi di sincronizzazione temporale (`MessageFilter` exact sync) nel nodo di fusione.
+
+### 5.3 Zero-Copy IPC (Component Registration)
+Il nodo è stato migrato all'architettura **ROS 2 Components**. Registrando `ZedPerceptionNode` come `rclcpp_components::NodeFactory`, il sistema può scambiare i pesanti canvas di segmentazione tramite **puntatori condivisi (Shared Memory)** invece di serializzare i dati sul bus ROS, abbattendo l'overhead di latenza inter-processo.

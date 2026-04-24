@@ -2,6 +2,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
 #include <fstream>
+#include <rclcpp_components/register_node_macro.hpp>
 
 ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     : Node("zed_perception_node", options) {
@@ -109,9 +110,9 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
         }
         if (debug_mask_pub_->get_subscription_count() > 0) {
             cv::Mat color_mask = cv::Mat::zeros(raw_mask.size(), CV_8UC3);
-            for (size_t i = 0; i < detections.size(); ++i) {
-                uint8_t id = static_cast<uint8_t>(i + 1);
-                color_mask.setTo(get_class_color(detections[i].class_id), raw_mask == id);
+            // Semantic Debug: Iterate over possible classes (1:Blue, 2:Yellow, etc.)
+            for (int class_id = 0; class_id < 5; ++class_id) {
+                color_mask.setTo(get_class_color(class_id), raw_mask == (class_id + 1));
             }
             debug_mask_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", color_mask).toImageMsg());
         }
@@ -133,3 +134,5 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500, "LATENCY: %.2f ms | FREQUENCY: %.2f Hz", total_ms, hz);
     }
 }
+
+RCLCPP_COMPONENTS_REGISTER_NODE(ZedPerceptionNode)

@@ -13,17 +13,13 @@ class Logger : public nvinfer1::ILogger {
 
 Yolo26nSeg::Yolo26nSeg(const std::string &engine_path, float conf_threshold,
                        float nms_threshold)
-    : graph_initialized_(false), conf_threshold_(conf_threshold), nms_threshold_(nms_threshold) {
+    : conf_threshold_(conf_threshold), nms_threshold_(nms_threshold) {
   loadEngine(engine_path);
   allocateBuffers();
   cudaStreamCreate(&stream_);
 }
 
 Yolo26nSeg::~Yolo26nSeg() {
-  if (graph_initialized_) {
-    cudaGraphExecDestroy(instance_);
-    cudaGraphDestroy(graph_);
-  }
   cudaStreamDestroy(stream_);
   for (void *buf : buffers_) cudaFree(buf);
   cudaFree(d_src_image_);
@@ -75,36 +71,19 @@ void Yolo26nSeg::allocateBuffers() {
   host_output0_raw_.resize(get_size(output0_dims_) * element_size);
 }
 
-void Yolo26nSeg::initGraph(const cv::Mat& sample_img, uint8_t* d_mask_canvas) {
-  context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
-  context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
-  context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
-  context_->enqueueV3(stream_);
-  cudaStreamSynchronize(stream_);
-
-  cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal);
-  launch_preprocess((uint8_t*)d_src_image_, buffers_[0], sample_img.cols, sample_img.rows, input_dims_.d[3], input_dims_.d[2], sample_img.channels(), is_fp16_, stream_);
-  context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
-  context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
-  context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
-  context_->enqueueV3(stream_);
-  launch_reformat_prototypes(buffers_[2], d_proto_reformatted_, 160, 160, 32, is_fp16_, stream_);
-  launch_postprocess_mask(buffers_[1], d_proto_reformatted_, d_mask_canvas, sample_img.cols, sample_img.rows, conf_threshold_, is_fp16_, stream_);
-  cudaStreamEndCapture(stream_, &graph_);
-  cudaGraphInstantiate(&instance_, graph_, 0);
-  graph_initialized_ = true;
-}
-
 void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas) {
   size_t src_size = bgr_image.total() * bgr_image.elemSize();
   cudaMemcpyAsync(d_src_image_, bgr_image.data, src_size, cudaMemcpyHostToDevice, stream_);
 
-  if (!graph_initialized_) {
-    initGraph(bgr_image, d_mask_canvas);
-  }
+  launch_preprocess((uint8_t*)d_src_image_, buffers_[0], bgr_image.cols, bgr_image.rows, input_dims_.d[3], input_dims_.d[2], bgr_image.channels(), is_fp16_, stream_);
   
-  cudaGraphLaunch(instance_, stream_);
-  // NO SYNC HERE: Node will handle it
+  context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
+  context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
+  context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
+  context_->enqueueV3(stream_);
+
+  launch_reformat_prototypes(buffers_[2], d_proto_reformatted_, 160, 160, 32, is_fp16_, stream_);
+  launch_postprocess_mask(buffers_[1], d_proto_reformatted_, d_mask_canvas, bgr_image.cols, bgr_image.rows, conf_threshold_, is_fp16_, stream_);
 }
 
 std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {

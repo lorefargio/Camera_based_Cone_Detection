@@ -31,9 +31,6 @@ private:
     void preprocess_gpu(const cv::Mat& src);
     std::vector<DetectedCone> postprocess(void* output0, void* output1, const cv::Size& original_size);
 
-    // CUDA Graph management
-    void initGraph(const cv::Mat& sample_img, uint8_t* d_mask_canvas);
-
     // Cuda resources
     std::unique_ptr<nvinfer1::IRuntime> runtime_;
     std::unique_ptr<nvinfer1::ICudaEngine> engine_;
@@ -43,11 +40,6 @@ private:
     void* d_src_image_; 
     void* d_proto_reformatted_; 
     
-    // CUDA Graph members
-    cudaGraph_t graph_;
-    cudaGraphExec_t instance_;
-    bool graph_initialized_;
-
     float conf_threshold_;
     float nms_threshold_;
     bool is_fp16_;

@@ -11,6 +11,7 @@ endif()
 # Find ROS 2 packages
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -51,7 +52,11 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
       cuda
     )
     ament_target_dependencies(zed_fusion_core
-      rclcpp sensor_msgs geometry_msgs visualization_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
+      rclcpp rclcpp_components sensor_msgs geometry_msgs visualization_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
+    )
+
+    rclcpp_components_register_node(zed_fusion_core
+      PLUGIN "ZedPerceptionNode"
     )
 
     add_executable(zed_fusion_node src/main.cpp)
