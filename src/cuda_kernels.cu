@@ -4,7 +4,10 @@
 #include <stdint.h>
 #include <math.h>
 
-// --- PREPROCESSING ---
+/**
+ * @brief CUDA kernel for high-performance image preprocessing.
+ * Performs bilinear interpolation and normalization directly on GPU.
+ */
 template <typename T>
 __global__ void preprocess_kernel_optimized(const uint8_t* src, T* dst, int src_w, int src_h, int dst_w, int dst_h, int channels) {
     int dx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -25,7 +28,7 @@ __global__ void preprocess_kernel_optimized(const uint8_t* src, T* dst, int src_
         int area = dst_w * dst_h;
 
         for (int c = 0; c < 3; ++c) {
-            int channel_idx = 2 - c; 
+            int channel_idx = 2 - c; // BGR to RGB
             float p00 = src[(y0 * src_w + x0) * channels + channel_idx];
             float p01 = src[(y0 * src_w + x1) * channels + channel_idx];
             float p10 = src[(y1 * src_w + x0) * channels + channel_idx];
@@ -41,7 +44,10 @@ __global__ void preprocess_kernel_optimized(const uint8_t* src, T* dst, int src_
     }
 }
 
-// --- REFORMAT PROTOTYPES (CHW to HWC) ---
+/**
+ * @brief CUDA kernel for prototype reformatting (CHW to HWC).
+ * Resolves cache misses by making mask prototypes contiguous for each pixel.
+ */
 template <typename T>
 __global__ void reformat_prototypes_kernel(const T* src, T* dst, int w, int h, int channels) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -54,13 +60,16 @@ __global__ void reformat_prototypes_kernel(const T* src, T* dst, int w, int h, i
     }
 }
 
-// --- POSTPROCESSING (Using Reformatted HWC Prototypes) ---
 #define MAX_DETECTIONS_SHARED 128
 
+/**
+ * @brief Optimized mask post-processing kernel using Shared Memory Tiling.
+ * Generates a semantic mask canvas by evaluating mask logits for each pixel.
+ */
 template <typename T>
 __global__ void postprocess_mask_kernel_optimized(
     const T* output0,
-    const T* output1_hwc, // Input is now HWC
+    const T* output1_hwc,
     uint8_t* mask_canvas,
     int canvas_w, int canvas_h,
     float conf_threshold
@@ -72,6 +81,7 @@ __global__ void postprocess_mask_kernel_optimized(
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
     int threads_per_block = blockDim.x * blockDim.y;
 
+    // Collaborative loading into Shared Memory
     for (int i = tid; i < MAX_DETECTIONS_SHARED; i += threads_per_block) {
         const T* row = output0 + i * 38;
         s_bboxes[i][0] = (float)row[0] * canvas_w / 640.0f;
@@ -92,24 +102,27 @@ __global__ void postprocess_mask_kernel_optimized(
     uint8_t best_id = 0;
     float max_conf = conf_threshold;
 
+    // Coordinate mapping to prototype space (160x160)
     int px = x * 160 / canvas_w;
     int py = y * 160 / canvas_h;
     
-    // Contiguous access to all 32 channels for this pixel!
+    // Contiguous access to HWC prototypes
     const T* pixel_protos = output1_hwc + (py * 160 + px) * 32;
 
     for (int i = 0; i < MAX_DETECTIONS_SHARED; ++i) {
         float conf = s_bboxes[i][4];
         if (conf < max_conf) continue;
 
+        // Bounding Box Check
         if (x >= s_bboxes[i][0] && x <= s_bboxes[i][2] && y >= s_bboxes[i][1] && y <= s_bboxes[i][3]) {
             float mask_logit = 0.0f;
             #pragma unroll
             for (int c = 0; c < 32; ++c) {
                 mask_logit += s_coeffs[i][c] * (float)pixel_protos[c];
             }
+            // Sigmoid thresholding
             if (1.0f / (1.0f + expf(-mask_logit)) > 0.5f) {
-                best_id = s_class_ids[i] + 1;
+                best_id = s_class_ids[i] + 1; // Class ID based semantic encoding
                 max_conf = conf;
             }
         }

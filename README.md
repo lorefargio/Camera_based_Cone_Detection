@@ -1,11 +1,11 @@
-# Ultra-High Performance Perception: YOLO26n-Seg with CUDA-Centric Architecture
+# Camera Perception: YOLO26n-Seg with CUDA-Centric Architecture
 
-Questo repository implementa un nodo di percezione visuale ad altissime prestazioni per la Formula Student Driverless. Il sistema agisce come un **High-Performance Mask Provider**, fornendo mappe di segmentazione precise in tempo reale per algoritmi di fusione LiDAR-Camera.
+This repository implements a high-performance visual perception node for Formula Student Driverless. The system acts as a **High-Performance Mask Provider**, providing precise real-time segmentation maps for LiDAR-Camera fusion algorithms.
 
-## 1. Architettura GPU-Centric & Design Philosophy
-La filosofia del nodo è il **minimale coinvolgimento della CPU**. La GPU gestisce l'intero carico di elaborazione, lasciando la CPU libera per i compiti di pianificazione e controllo.
+## 1. GPU-Centric Architecture & Design Philosophy
+The node's philosophy is **minimal CPU involvement**. The GPU handles the entire processing load, leaving the CPU free for planning and control tasks.
 
-### 1.1 Schema a Blocchi della Pipeline
+### 1.1 Pipeline Block Diagram
 ```mermaid
 graph TD
     subgraph Node ["ZedPerceptionNode"]
@@ -42,11 +42,11 @@ graph TD
     style POST fill:#04010C,stroke:#005cc5,stroke-width:1px
 ```
 
-## 2. Dettaglio delle Ottimizzazioni CUDA
-Per un'analisi tecnica approfondita sulle scelte di architettura della memoria, layout HWC e gestione delle cache, consultare il documento: [CUDA Architecture Deep Dive](CUDA_ARCHITECTURE_DEEP_DIVE.md).
+## 2. CUDA Optimization Details
+For an in-depth technical analysis of memory architecture choices, HWC layout, and cache management, please refer to the document: [CUDA Architecture Deep Dive](CUDA_ARCHITECTURE_DEEP_DIVE.md).
 
 ### 2.1 Pipeline Synchronization Path (Single-Sync)
-L'uso di calcolo asincrono richiede una gestione attenta dei punti di stop. Una sincronizzazione eccessiva annulla i benefici dell'offloading. La nostra "Single-Sync Batch Pipeline" lancia tutte le operazioni GPU in sequenza, permettendo il **Compute-Transfer Overlap**: mentre la GPU calcola, il bus PCIe scarica i dati già pronti.
+The use of asynchronous computing requires careful management of synchronization points. Excessive synchronization negates the benefits of offloading. Our "Single-Sync Batch Pipeline" launches all GPU operations in sequence, allowing for **Compute-Transfer Overlap**: while the GPU computes, the PCIe bus downloads the data already ready.
 
 ```mermaid
 sequenceDiagram
@@ -62,33 +62,33 @@ sequenceDiagram
 ```
 
 ### 2.2 Memory Reformatting (CHW to HWC)
-I prototipi di YOLO26 sono prodotti in formato CHW. Per ogni pixel, la GPU dovrebbe leggere 32 canali distanti tra loro, saturando il controller con accessi non contigui (strided).
-**Soluzione**: Un kernel di trasposizione riorganizza i dati in **HWC**. Questo garantisce che i 32 canali siano **fisicamente contigui** in VRAM, permettendo letture "coalesced" e massimizzando il throughput della cache.
+YOLO26 prototypes are produced in CHW format. For each pixel, the GPU would have to read 32 channels distant from each other, saturating the controller with non-contiguous (strided) accesses.
+**Solution**: A transposition kernel reorganizes the data into **HWC**. This ensures that the 32 channels are **physically contiguous** in VRAM, allowing for "coalesced" reads and maximizing cache throughput.
 
 
 ### 2.3 Shared Memory Tiling Post-processing
-Per evitare miliardi di accessi ridondanti alla VRAM globale, il kernel di post-elaborazione utilizza la **Shared Memory** (L1 cache programmabile). I thread caricano i coefficienti delle 128 detection più rilevanti una sola volta per blocco, abbattendo la latenza di accesso ai dati.
+To avoid billions of redundant accesses to global VRAM, the post-processing kernel utilizes **Shared Memory** (programmable L1 cache). Threads load the coefficients of the 128 most relevant detections only once per block, slashing data access latency.
 
-## 3. Risultati Sperimentali (NVIDIA T1000, 8GB)
+## 3. Experimental Results (NVIDIA T1000, 8GB)
 
-| Metrica | FP32 Input/Output | **FP16 Nativo (Ottimizzato)** |
+| Metric | FP32 Input/Output | **FP16 Native (Optimized)** |
 | :--- | :--- | :--- |
-| **Latenza Media** | 10.17 ms | **9.40 ms** |
-| **P99 (99° Percentile)** | 13.25 ms | **12.67 ms** |
-| **Frequenza Effettiva** | 98 Hz | **107 Hz** |
-| **Stabilità (Std Dev)** | 1.25 ms | **0.90 ms** |
+| **Average Latency** | 10.17 ms | **9.40 ms** |
+| **P99 (99th Percentile)** | 13.25 ms | **12.67 ms** |
+| **Effective Frequency** | 98 Hz | **107 Hz** |
+| **Stability (Std Dev)** | 1.25 ms | **0.90 ms** |
 
-## 4. Analisi e Benchmark
-Per riprodurre i dati per la tesi:
-1. Compila in Release: `colcon build --packages-select zed_fusion_perception --cmake-args -DCMAKE_BUILD_TYPE=Release`
-2. Lancia con export attivo: `ros2 launch zed_fusion_perception test_detection_launch.py export_stats:=true`
-3. Analizza i dati: `python3 scripts/analyze_performance.py`
+## 4. Analysis and Benchmark
+To reproduce the data:
+1. Compile in Release: `colcon build --packages-select camera_perception --cmake-args -DCMAKE_BUILD_TYPE=Release`
+2. Launch with export active: `ros2 launch camera_perception test_detection_launch.py export_stats:=true`
+3. Analyze data: `python3 scripts/analyze_performance.py`
 
-## 5. Integrazione Avanzata con Fusion Node 
-Per ottimizzare la pipeline di fusione LiDAR-Camera, sono state implementate le seguenti scelte sull'output del nodo:
+## 5. Advanced Integration with Fusion Node 
+To optimize the LiDAR-Camera fusion pipeline, the following choices were implemented for the node's output:
 
 ### 5.1 Semantic Encoding (O(1) Class Query)
-Il canvas della maschera contiene l'**ID della Classe YOLO**. Questo permette al Fusion Node di conoscere il colore del cono proiettato con un singolo accesso alla memoria:
+The mask canvas contains the **YOLO Class ID**. This allows the Fusion Node to know the projected cone color with a single memory access:
 - `0`: Background
 - `1`: Blue Cone
 - `2`: Yellow Cone
@@ -96,7 +96,7 @@ Il canvas della maschera contiene l'**ID della Classe YOLO**. Questo permette al
 - `4`: Big Orange Cone
 
 ### 5.2 Timestamp Preservation
-Il campo `mask_msg->header.stamp` è garantito essere identico al timestamp dell'immagine raw in ingresso. Questo elimina problemi di sincronizzazione temporale (`MessageFilter` exact sync) nel nodo di fusione.
+The `mask_msg->header.stamp` field is guaranteed to be identical to the incoming raw image timestamp. This eliminates temporal synchronization issues (`MessageFilter` exact sync) in the fusion node.
 
 ### 5.3 Zero-Copy IPC (Component Registration)
-Il nodo è stato migrato all'architettura **ROS 2 Components**. Registrando `ZedPerceptionNode` come `rclcpp_components::NodeFactory`, il sistema può scambiare i pesanti canvas di segmentazione tramite **puntatori condivisi (Shared Memory)** invece di serializzare i dati sul bus ROS, abbattendo l'overhead di latenza inter-processo.
+The node has been migrated to the **ROS 2 Components** architecture. By registering `ZedPerceptionNode` as a `rclcpp_components::NodeFactory`, the system can exchange heavy segmentation canvases via **Shared Pointers (Shared Memory)** instead of serializing data on the ROS bus, significantly reducing inter-process latency overhead.

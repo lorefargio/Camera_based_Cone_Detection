@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(zed_fusion_perception)
+project(camera_perception)
 
 # Enable CUDA
 enable_language(CUDA)
@@ -33,35 +33,32 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
     message(STATUS "CUDA and TensorRT found. Enabling GPU features.")
     include_directories(include ${OpenCV_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR} ${CUDA_INCLUDE_DIRS})
 
-    add_library(zed_fusion_core SHARED
+    add_library(camera_perception_core SHARED
       src/yolo26_tensorrt.cpp
       src/zed_perception_node.cpp
       src/cuda_kernels.cu
     )
     
-    set_target_properties(zed_fusion_core PROPERTIES
+    set_target_properties(camera_perception_core PROPERTIES
       CUDA_SEPARABLE_COMPILATION ON
       CUDA_ARCHITECTURES "75" # T1000 is Turing (7.5)
     )
 
-    target_link_libraries(zed_fusion_core
+    target_link_libraries(camera_perception_core
       ${OpenCV_LIBRARIES}
       ${TENSORRT_LIBRARY}
       ${TENSORRT_PARSER}
       ${CUDA_CUDART_LIBRARY}
       cuda
     )
-    ament_target_dependencies(zed_fusion_core
+    ament_target_dependencies(camera_perception_core
       rclcpp rclcpp_components sensor_msgs geometry_msgs visualization_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
     )
 
-    rclcpp_components_register_node(zed_fusion_core
+    rclcpp_components_register_node(camera_perception_core
       PLUGIN "ZedPerceptionNode"
-      EXECUTABLE zed_perception_component_runner
+      EXECUTABLE perception_node
     )
-
-    add_executable(zed_fusion_node src/main.cpp)
-    target_link_libraries(zed_fusion_node zed_fusion_core)
 
     add_executable(video_tester src/test_video.cpp src/yolo26_tensorrt.cpp src/cuda_kernels.cu)
     set_target_properties(video_tester PROPERTIES CUDA_ARCHITECTURES "75")
@@ -75,7 +72,7 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
       rclcpp geometry_msgs sensor_msgs cv_bridge
     )
 
-    install(TARGETS zed_fusion_core zed_fusion_node video_tester
+    install(TARGETS camera_perception_core perception_node video_tester
       ARCHIVE DESTINATION lib
       LIBRARY DESTINATION lib
       RUNTIME DESTINATION lib/${PROJECT_NAME}

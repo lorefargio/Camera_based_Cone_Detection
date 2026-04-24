@@ -8,7 +8,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory('zed_fusion_perception')
+    pkg_share = get_package_share_directory('camera_perception')
     
     # Launch Configurations
     use_zed = LaunchConfiguration('use_zed')
@@ -38,8 +38,8 @@ def generate_launch_description():
 
     # 3. Perception Node
     perception_node = Node(
-        package='zed_fusion_perception',
-        executable='zed_fusion_node',
+        package='camera_perception',
+        executable='perception_node',
         name='zed_perception_node',
         output='screen',
         parameters=[{

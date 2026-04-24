@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>zed_fusion_perception</name>
+  <name>camera_perception</name>
   <version>0.0.1</version>
-  <description>ZED2i and LiDAR Fusion Perception using YOLO26n-seg and TensorRT</description>
-  <maintainer email="lore@todo.todo">lore</maintainer>
-  <license>Apache-2.0</license>
+  <description>Camera Perception using YOLO26n-seg, CUDA and TensorRT</description>
+  <maintainer email="lore@todo.todo">Lorenzo Fargione</maintainer>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

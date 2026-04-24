@@ -1,9 +1,12 @@
-#include "zed_fusion_perception/yolo26_tensorrt.hpp"
+#include "yolo26_tensorrt.hpp"
 #include <cmath>
 #include <cuda_runtime_api.h>
 #include <fstream>
 #include <iostream>
 
+/**
+ * @brief Logger for TensorRT error and warning messages.
+ */
 class Logger : public nvinfer1::ILogger {
   void log(Severity severity, const char *msg) noexcept override {
     if (severity <= Severity::kWARNING)
@@ -40,12 +43,15 @@ void Yolo26nSeg::loadEngine(const std::string &path) {
   engine_.reset(runtime_->deserializeCudaEngine(data.data(), size));
   context_.reset(engine_->createExecutionContext());
 
+  // Determine if the engine uses FP16 precision
   is_fp16_ = false;
   for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
     std::string name = engine_->getIOTensorName(i);
     nvinfer1::Dims dims = engine_->getTensorShape(name.c_str());
     nvinfer1::DataType type = engine_->getTensorDataType(name.c_str());
     if (type == nvinfer1::DataType::kHALF) is_fp16_ = true;
+    
+    // Identify input and output tensors by shape
     if (dims.nbDims == 4 && dims.d[1] == 3) {
       input_name_ = name; input_dims_ = dims;
     } else if (dims.nbDims == 3) {
@@ -66,7 +72,7 @@ void Yolo26nSeg::allocateBuffers() {
   cudaMalloc(&buffers_[0], get_size(input_dims_) * element_size);
   cudaMalloc(&buffers_[1], get_size(output0_dims_) * element_size);
   cudaMalloc(&buffers_[2], get_size(output1_dims_) * element_size);
-  cudaMalloc(&d_src_image_, 2208 * 1242 * 4); 
+  cudaMalloc(&d_src_image_, 2208 * 1242 * 4); // Max ZED 2k resolution
   cudaMalloc(&d_proto_reformatted_, get_size(output1_dims_) * element_size);
   host_output0_raw_.resize(get_size(output0_dims_) * element_size);
 }
@@ -75,19 +81,24 @@ void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canva
   size_t src_size = bgr_image.total() * bgr_image.elemSize();
   cudaMemcpyAsync(d_src_image_, bgr_image.data, src_size, cudaMemcpyHostToDevice, stream_);
 
+  // 1. Bilinear Preprocessing (Resizing + Normalization)
   launch_preprocess((uint8_t*)d_src_image_, buffers_[0], bgr_image.cols, bgr_image.rows, input_dims_.d[3], input_dims_.d[2], bgr_image.channels(), is_fp16_, stream_);
   
+  // 2. TensorRT Inference Execution
   context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
   context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
   context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
   context_->enqueueV3(stream_);
 
+  // 3. Prototype Reformatting (CHW to HWC for cache locality)
   launch_reformat_prototypes(buffers_[2], d_proto_reformatted_, 160, 160, 32, is_fp16_, stream_);
+  
+  // 4. Semantic Mask Generation via GPU Kernel
   launch_postprocess_mask(buffers_[1], d_proto_reformatted_, d_mask_canvas, bgr_image.cols, bgr_image.rows, conf_threshold_, is_fp16_, stream_);
 }
 
 std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {
-  // DtoH is async, no sync here
+  // Trigger asynchronous download of the primary detection output
   cudaMemcpyAsync(host_output0_raw_.data(), buffers_[1], host_output0_raw_.size(), cudaMemcpyDeviceToHost, stream_);
   return postprocess(host_output0_raw_.data(), nullptr, bgr_image.size());
 }
@@ -98,6 +109,7 @@ std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void*, const cv::S
   const int num_channels = 38;
   float scale_w = (float)original_size.width / 640.0f;
   float scale_h = (float)original_size.height / 640.0f;
+
   for (int i = 0; i < num_detections; ++i) {
     float score;
     float row_data[6];
@@ -112,9 +124,11 @@ std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void*, const cv::S
       if (score < conf_threshold_) continue;
       for (int j=0; j<6; ++j) row_data[j] = row[j];
     }
+
     DetectedCone det;
     det.class_id = (int)row_data[5];
     det.yolo_confidence = score;
+    // Map bounding box center back to original image coordinates
     det.center_2d = cv::Point2f(row_data[0] * scale_w + (row_data[2] * scale_w - row_data[0] * scale_w)/2.0f, 
                                 row_data[1] * scale_h + (row_data[3] * scale_h - row_data[1] * scale_h)/2.0f);
     detections.push_back(det);
