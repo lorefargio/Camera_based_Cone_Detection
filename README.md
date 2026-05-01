@@ -79,10 +79,15 @@ To avoid billions of redundant accesses to global VRAM, the post-processing kern
 | **Stability (Std Dev)** | 1.25 ms | **0.90 ms** |
 
 ## 4. Analysis and Benchmark
-To reproduce the data:
+To compare the performance of the custom CUDA kernels against the standard CPU baseline:
 1. Compile in Release: `colcon build --packages-select camera_perception --cmake-args -DCMAKE_BUILD_TYPE=Release`
-2. Launch with export active: `ros2 launch camera_perception test_detection_launch.py export_stats:=true`
-3. Analyze data: `python3 scripts/analyze_performance.py`
+2. Run benchmark with CUDA Kernels (Default):
+   `ros2 launch camera_perception test_detection_launch.py export_stats:=true use_cuda_kernels:=true`
+3. Run benchmark with CPU Baseline:
+   `ros2 launch camera_perception test_detection_launch.py export_stats:=true use_cuda_kernels:=false`
+4. Analyze data: `python3 scripts/analyze_performance.py`
+
+The `camera_stats.csv` file now includes a `cuda_kernels_enabled` column to distinguish between the two modes during analysis.
 
 ## 5. Advanced Integration with Fusion Node 
 To optimize the LiDAR-Camera fusion pipeline, the following choices were implemented for the node's output:

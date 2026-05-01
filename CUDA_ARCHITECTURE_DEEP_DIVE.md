@@ -48,3 +48,20 @@ Experimental tests show that switching from FP32 to FP16 brings a modest latency
 
 ## 6. Architectural Conclusions
 The efficiency of this pipeline does not come from "brute force" calculation, but from the **symmetry between memory layout and cache hierarchy**. Treating the GPU not as a general-purpose processor, but as an accelerator driven by memory throughput, allowed us to achieve processing frequencies exceeding 100Hz on entry-level hardware (NVIDIA T1000), while ensuring deterministic latency for the fusion node.
+
+## 7. Benchmarking and CPU Baseline
+To rigorously quantify the speedup achieved by these optimizations, the node includes a **Standard CPU Baseline** mode (`use_cuda_kernels:=false`). 
+
+### 7.1 Comparison Methodology
+When the custom kernels are disabled, the system reverts to a standard pipeline:
+1. **CPU Preprocessing**: OpenCV-based resizing and normalization on the host.
+2. **GPU Inference**: Standard TensorRT execution.
+3. **CPU Postprocessing**: Downloading all raw prototypes and detections to the host, and generating the mask canvas using nested loops and standard sigmoid functions on the CPU.
+
+### 7.2 Why this Baseline is Necessary
+This mode serves as a "control group" for performance analysis. It exposes the massive overhead caused by:
+- **Host-to-Device/Device-to-Host transfers** of heavy prototype tensors (CHW layout).
+- **CPU-side processing** of high-resolution mask canvases without hardware parallelism.
+- **Cache-unfriendly access patterns** in the standard CHW layout.
+
+By comparing the two modes using `scripts/analyze_performance.py`, the user can empirically verify the impact of the CUDA-centric architecture on both latency and system jitter.

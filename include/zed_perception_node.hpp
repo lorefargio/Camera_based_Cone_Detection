@@ -47,5 +47,6 @@ private:
     // Parameters and Statistics
     bool publish_debug_;
     bool export_stats_;
+    bool use_cuda_kernels_;
     std::ofstream stats_file_;
 };
