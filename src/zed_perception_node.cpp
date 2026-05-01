@@ -13,13 +13,15 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     float nms_threshold = this->declare_parameter("nms_threshold", 0.45);
     publish_debug_ = this->declare_parameter("publish_debug", false);
     export_stats_ = this->declare_parameter("export_stats", false);
+    bool use_cuda_kernels = this->declare_parameter("use_cuda_kernels", true);
 
     // Initialize inference engine
-    yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold);
+    yolo_ = std::make_unique<Yolo26nSeg>(engine_path, conf_threshold, nms_threshold, use_cuda_kernels);
 
     RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
     RCLCPP_INFO(this->get_logger(), " CAMERA PERCEPTION NODE INITIALIZED");
     RCLCPP_INFO(this->get_logger(), " - Mode: High-Performance Mask Provider");
+    RCLCPP_INFO(this->get_logger(), " - Custom CUDA Kernels: %s", use_cuda_kernels ? "ENABLED" : "DISABLED (CPU Baseline)");
     RCLCPP_INFO(this->get_logger(), " - Optimization: Single-Sync Batch Pipeline");
     RCLCPP_INFO(this->get_logger(), "--------------------------------------------------");
 

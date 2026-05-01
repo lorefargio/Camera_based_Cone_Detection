@@ -17,6 +17,7 @@ def generate_launch_description():
     engine_path = LaunchConfiguration('engine_path')
     publish_debug = LaunchConfiguration('publish_debug')
     export_stats = LaunchConfiguration('export_stats')
+    use_cuda_kernels = LaunchConfiguration('use_cuda_kernels')
     
     # 1. ZED Wrapper Launch
     zed_launch = IncludeLaunchDescription(
@@ -48,6 +49,7 @@ def generate_launch_description():
             'nms_threshold': 0.45,
             'publish_debug': publish_debug,
             'export_stats': export_stats,
+            'use_cuda_kernels': use_cuda_kernels,
         }],
         remappings=[
             ('/zed/zed_node/rgb/color/rect/image', '/zed/zed_node/rgb/color/rect/image'),
@@ -74,6 +76,9 @@ def generate_launch_description():
         
         DeclareLaunchArgument('export_stats', default_value='false', 
                               description='Esporta i tempi di esecuzione in perception_stats.csv'),
+        
+        DeclareLaunchArgument('use_cuda_kernels', default_value='true', 
+                              description='Abilita l\'uso dei custom CUDA kernels (src/cuda_kernels.cu) per preprocessing e postprocessing'),
 
         zed_launch,
         bag_play,

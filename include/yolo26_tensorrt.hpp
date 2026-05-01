@@ -27,7 +27,7 @@ public:
      * @param conf_threshold Confidence threshold for filtering detections.
      * @param nms_threshold Non-Maximum Suppression threshold.
      */
-    Yolo26nSeg(const std::string& engine_path, float conf_threshold = 0.5, float nms_threshold = 0.45);
+    Yolo26nSeg(const std::string& engine_path, float conf_threshold = 0.5, float nms_threshold = 0.45, bool use_cuda_kernels = true);
     
     /**
      * @brief Destructor for Yolo26nSeg. Cleans up CUDA and TensorRT resources.
@@ -42,7 +42,7 @@ public:
     std::vector<DetectedCone> infer(const cv::Mat& bgr_image);
     
     /**
-     * @brief High-performance path: populates a semantic mask canvas directly on the GPU.
+     * @brief Populates a semantic mask canvas. Can use either custom CUDA kernels or standard pipeline.
      * @param bgr_image Input BGR image from the camera.
      * @param d_mask_canvas Device pointer to the output mono8 mask canvas.
      */
@@ -67,10 +67,17 @@ private:
     void allocateBuffers();
 
     /**
-     * @brief Prepares the input image on the GPU (resizing and normalization).
+     * @brief Standard CPU preprocessing (resize + normalization) for comparison.
      * @param src Source BGR image.
      */
-    void preprocess_gpu(const cv::Mat& src);
+    void preprocess_cpu(const cv::Mat& src);
+
+    /**
+     * @brief Standard CPU post-processing for mask generation.
+     * @param bgr_image Input image for size reference.
+     * @param d_mask_canvas Device pointer to upload the resulting mask.
+     */
+    void postprocess_mask_cpu(const cv::Mat& bgr_image, uint8_t* d_mask_canvas);
 
     /**
      * @brief CPU side post-processing to parse raw TensorRT output into DetectedCone objects.
@@ -95,6 +102,7 @@ private:
     float conf_threshold_;
     float nms_threshold_;
     bool is_fp16_;
+    bool use_cuda_kernels_;
 
     // Tensor shapes and names
     nvinfer1::Dims input_dims_;
