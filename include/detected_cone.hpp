@@ -11,5 +11,6 @@ struct DetectedCone {
     int class_id;              ///< YOLO Class ID (0: Blue, 1: Yellow, 2: Orange, 3: Big Orange, 4: Fallen)
     float yolo_confidence;     ///< Confidence score from the detector (0.0 - 1.0)
     cv::Point2f center_2d;     ///< 2D coordinates of the cone center in pixels
+    cv::Rect bbox;             ///< Bounding box of the detection in pixels
     cv::Mat mask;              ///< Optional: binary mask for the specific instance
 };

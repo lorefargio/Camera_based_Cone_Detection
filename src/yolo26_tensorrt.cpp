@@ -229,9 +229,14 @@ std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void*, const cv::S
     DetectedCone det;
     det.class_id = (int)row_data[5];
     det.yolo_confidence = score;
-    // Map bounding box center back to original image coordinates
-    det.center_2d = cv::Point2f(row_data[0] * scale_w + (row_data[2] * scale_w - row_data[0] * scale_w)/2.0f, 
-                                row_data[1] * scale_h + (row_data[3] * scale_h - row_data[1] * scale_h)/2.0f);
+    // Map bounding box center and size back to original image coordinates
+    float x1 = row_data[0] * scale_w;
+    float y1 = row_data[1] * scale_h;
+    float x2 = row_data[2] * scale_w;
+    float y2 = row_data[3] * scale_h;
+    
+    det.bbox = cv::Rect(cv::Point(x1, y1), cv::Point(x2, y2));
+    det.center_2d = cv::Point2f(x1 + (x2 - x1) / 2.0f, y1 + (y2 - y1) / 2.0f);
     detections.push_back(det);
   }
   return detections;

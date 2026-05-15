@@ -41,6 +41,7 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
     debug_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/debug_image", 10);
     debug_mask_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/debug_mask_canvas", 10);
     mask_canvas_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/perception/camera_mask_canvas", 10);
+    detection_pub_ = this->create_publisher<vision_msgs::msg::Detection2DArray>("/perception/detections", 10);
 }
 
 void ZedPerceptionNode::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
@@ -126,6 +127,27 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
 
     // Publish the mask message (using std::move for Zero-Copy if supported by transport)
     mask_canvas_pub_->publish(std::move(mask_msg));
+
+    // 4. Publish Detections (Bounding Boxes)
+    auto detection_array = std::make_unique<vision_msgs::msg::Detection2DArray>();
+    detection_array->header = msg->header;
+    for (const auto& det : detections) {
+        vision_msgs::msg::Detection2D d;
+        d.header = msg->header;
+        
+        vision_msgs::msg::ObjectHypothesisWithPose hyp;
+        hyp.hypothesis.class_id = std::to_string(det.class_id);
+        hyp.hypothesis.score = det.yolo_confidence;
+        d.results.push_back(hyp);
+        
+        d.bbox.center.position.x = det.center_2d.x;
+        d.bbox.center.position.y = det.center_2d.y;
+        d.bbox.size_x = det.bbox.width;
+        d.bbox.size_y = det.bbox.height;
+        
+        detection_array->detections.push_back(d);
+    }
+    detection_pub_->publish(std::move(detection_array));
 
     // Performance metrics calculation
     auto end_node = std::chrono::high_resolution_clock::now();

@@ -2,6 +2,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
 #include <fstream>
 #include "yolo26_tensorrt.hpp"
 
@@ -39,6 +40,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr mask_canvas_pub_;
+    rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_pub_;
     
     // Core Logic
     std::unique_ptr<Yolo26nSeg> yolo_;
