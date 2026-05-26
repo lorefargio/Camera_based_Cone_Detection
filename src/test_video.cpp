@@ -58,11 +58,15 @@ int main(int argc, char **argv) {
         if (det.class_id == 0)
           color = cv::Scalar(255, 0, 0);   // Blue
         else if (det.class_id == 1)
-          color = cv::Scalar(0, 255, 255); // Yellow
+          color = cv::Scalar(128, 128, 128); // Fallen (Gray)
         else if (det.class_id == 2)
           color = cv::Scalar(0, 165, 255); // Orange
+        else if (det.class_id == 3)
+          color = cv::Scalar(0, 0, 255);   // Big Orange (Red)
+        else if (det.class_id == 4)
+          color = cv::Scalar(0, 255, 255); // Yellow
         else
-          color = cv::Scalar(0, 255, 0);   // Other
+          color = cv::Scalar(0, 255, 0);   // Unknown
 
         // Draw detection center
         cv::circle(frame, det.center_2d, 4, color, -1);

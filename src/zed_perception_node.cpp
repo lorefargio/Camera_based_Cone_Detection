@@ -101,10 +101,10 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
         cv::Mat raw_mask(mask_msg->height, mask_msg->width, CV_8U, (void*)mask_msg->data.data());
         auto get_class_color = [](int class_id) {
             if (class_id == 0) return cv::Scalar(255, 0, 0);   // Blue
-            if (class_id == 1) return cv::Scalar(0, 255, 255); // Yellow
+            if (class_id == 1) return cv::Scalar(128, 128, 128); // Fallen (Gray)
             if (class_id == 2) return cv::Scalar(0, 165, 255); // Orange
             if (class_id == 3) return cv::Scalar(0, 0, 255);   // Big Orange (Red)
-            if (class_id == 4) return cv::Scalar(128, 128, 128); // Fallen (Gray)
+            if (class_id == 4) return cv::Scalar(0, 255, 255); // Yellow
             return cv::Scalar(255, 255, 255);
         };
 
