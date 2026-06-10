@@ -37,6 +37,8 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
     add_library(camera_perception_core SHARED
       src/yolo26_tensorrt.cpp
       src/zed_perception_node.cpp
+      src/camera_perception_pipeline.cpp
+      src/camera_visualization_bridge.cpp
       src/cuda_kernels.cu
     )
     

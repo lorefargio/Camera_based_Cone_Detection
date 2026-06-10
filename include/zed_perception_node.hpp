@@ -1,54 +1,39 @@
 #pragma once
+
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <vision_msgs/msg/detection2_d_array.hpp>
 #include <fstream>
-#include "yolo26_tensorrt.hpp"
+#include <memory>
+
+#include "camera_pipeline_config.hpp"
+#include "camera_perception_pipeline.hpp"
+#include "camera_visualization_bridge.hpp"
 
 /**
- * @brief ROS 2 Node for camera-based cone perception.
- * 
- * This node subscribes to raw ZED images and publishes semantic segmentation masks.
- * It is implemented as a ROS 2 Component to support Zero-Copy IPC.
+ * @class ZedPerceptionNode
+ * @brief Minimal ROS 2 wrapper for camera-based cone perception.
  */
 class ZedPerceptionNode : public rclcpp::Node {
 public:
-    /**
-     * @brief Constructor for ZedPerceptionNode.
-     * @param options Node options for ROS 2 configuration.
-     */
-    ZedPerceptionNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+    explicit ZedPerceptionNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+    ~ZedPerceptionNode() override;
 
 private:
-    /**
-     * @brief Callback for incoming image messages. Executes the perception pipeline.
-     * @param msg Shared pointer to the incoming sensor_msgs::msg::Image.
-     */
     void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg);
-
-    /**
-     * @brief Callback for camera calibration information.
-     * @param msg Shared pointer to the incoming sensor_msgs::msg::CameraInfo.
-     */
     void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
+    void loadParametersToConfig();
 
     // ROS 2 Communication
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub_;
     
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_mask_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr mask_canvas_pub_;
-    rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_pub_;
+    // Core Components
+    camera_perception::CameraPipelineConfig config_;
+    std::unique_ptr<camera_perception::CameraPerceptionPipeline> pipeline_;
+    std::unique_ptr<camera_perception::CameraVisualizationBridge> viz_bridge_;
     
-    // Core Logic
-    std::unique_ptr<Yolo26nSeg> yolo_;
     sensor_msgs::msg::CameraInfo camera_info_;
-    
-    // Parameters and Statistics
-    bool publish_debug_;
-    bool export_stats_;
-    bool use_cuda_kernels_;
     std::ofstream stats_file_;
+    int iter_count_ = 0;
 };
