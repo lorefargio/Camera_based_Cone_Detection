@@ -1,6 +1,6 @@
-# Camera-Based Cone Detection: TensorRT YOLOv8 Segmentation
+# Camera-Based Cone Detection: TensorRT yolo26 Segmentation
 
-A high-performance visual perception node designed to detect and segment traffic cones for Formula Student Autonomous racing. The system acts as a high-speed mask provider, supplying precise real-time semantic segmentation maps and bounding boxes for downstream LiDAR-Camera fusion.
+A high-performance visual perception node designed to detect and segment traffic cones for Formula Student Autonomous racing. The system acts as a high-speed mask provider, supplying precise real-time semantic segmentation maps for downstream LiDAR-Camera fusion.
 
 ---
 
@@ -42,7 +42,7 @@ Ensure your ROS 2 environment contains the following packages and system librari
 *   **OpenCV**: Image processing library (`libopencv-dev`)
 *   **CUDA Toolkit**: Required for preprocessing, reformatting, and postprocessing GPU kernels.
 *   **TensorRT**: High-performance deep learning inference library.
-*   **ROS Packages**: `rclcpp`, `rclcpp_components`, `sensor_msgs`, `vision_msgs`, `geometry_msgs`, `visualization_msgs`, `cv_bridge`, `image_transport`, `tf2_ros`, `tf2_geometry_msgs`.
+*   **ROS Packages**: `rclcpp`, `rclcpp_components`, `sensor_msgs`, `geometry_msgs`, `visualization_msgs`, `cv_bridge`, `image_transport`, `tf2_ros`, `tf2_geometry_msgs`.
 
 ---
 

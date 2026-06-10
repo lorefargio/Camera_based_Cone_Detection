@@ -7,7 +7,6 @@
 #include <deque>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <vision_msgs/msg/detection2_d_array.hpp>
 #include <opencv2/opencv.hpp>
 
 #include "detected_cone.hpp"
@@ -56,7 +55,6 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr mask_canvas_pub_;
-    rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_pub_;
 
     std::deque<std::unique_ptr<CameraVizData>> queue_;
     std::thread worker_thread_;

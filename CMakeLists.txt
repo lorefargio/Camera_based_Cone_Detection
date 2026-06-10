@@ -13,7 +13,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(vision_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
@@ -55,7 +54,7 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
       cuda
     )
     ament_target_dependencies(camera_perception_core
-      rclcpp rclcpp_components sensor_msgs vision_msgs geometry_msgs visualization_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
+      rclcpp rclcpp_components sensor_msgs geometry_msgs visualization_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
     )
 
     rclcpp_components_register_node(camera_perception_core
@@ -72,7 +71,7 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
       cuda
     )
     ament_target_dependencies(video_tester
-      rclcpp vision_msgs geometry_msgs sensor_msgs cv_bridge
+      rclcpp geometry_msgs sensor_msgs cv_bridge
     )
 
     install(TARGETS camera_perception_core perception_node video_tester

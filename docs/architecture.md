@@ -38,13 +38,13 @@ graph TD
 2.  **GPU Pre-processing**:
     The frame is uploaded to GPU memory where a custom CUDA preprocessing kernel (`launch_preprocess`) resizes, normalizes, and converts the layout of the image to match the TensorRT engine input shape.
 3.  **TensorRT Inference**:
-    Executes YOLOv8-based segmentation on an optimized CUDA execution stream, producing bounding boxes, confidence scores, and raw mask prototypes.
+    Executes yolo26-based segmentation on an optimized CUDA execution stream, producing confidence scores and raw mask prototypes.
 4.  **HWC Transposition & Mask Post-processing**:
     Custom CUDA post-processing kernels reorganize the raw CHW prototypes to HWC layout to resolve L1/L2 cache misses, compute the dot product between mask prototypes and detection coefficients, and construct the final binary mask canvas directly on the GPU.
 5.  **Asynchronous Visualization**:
     The host coordinates are downloaded and synchronised, then immediately enqueued into the [CameraVisualizationBridge](file:///Users/m2pro/Lidar_Camera_fusion_ws/src/Camera_based_Cone_Detection/src/camera_visualization_bridge.cpp). The main thread returns immediately.
 6.  **Annotations & Publishing**:
-    The background worker thread pops the data, draws circles and bounding boxes on the debug frame, and publishes the topics (Mono8 mask canvas, Detection2DArray bounding boxes, debug images) to ROS 2.
+    The background worker thread pops the data, draws circles on the debug frame, and publishes the topics (Mono8 mask canvas, debug images) to ROS 2.
 
 ---
 
