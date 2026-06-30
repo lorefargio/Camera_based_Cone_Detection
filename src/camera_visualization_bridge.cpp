@@ -93,10 +93,6 @@ void CameraVisualizationBridge::workerLoop() {
         mask_msg->step = mask_msg->width;
         mask_msg->data = std::move(data->mask_data);
 
-        mask_canvas_pub_->publish(std::move(mask_msg));
-
-
-
         // 3. Debug Visualizations
         if (publish_debug_) {
             cv::Mat raw_mask(data->height, data->width, CV_8U, (void*)mask_msg->data.data());
@@ -117,6 +113,8 @@ void CameraVisualizationBridge::workerLoop() {
                 debug_mask_pub_->publish(*cv_bridge::CvImage(data->header, "bgr8", color_mask).toImageMsg());
             }
         }
+
+        mask_canvas_pub_->publish(std::move(mask_msg));
     }
 }
 
