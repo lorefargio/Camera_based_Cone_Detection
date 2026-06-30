@@ -19,7 +19,13 @@ def analyze_and_compare(pt_csv, trt_nocuda_csv, trt_cuda_csv):
             continue
             
         df = pd.read_csv(filepath)
+        df['latency_ms'] = pd.to_numeric(df['latency_ms'], errors='coerce')
+        df = df.dropna(subset=['latency_ms'])
         
+        if df.empty:
+            print(f"Warning: {filepath} contains no valid latency data.")
+            continue
+            
         avg_latency = df['latency_ms'].mean()
         p95_latency = np.percentile(df['latency_ms'], 95)
         p99_latency = np.percentile(df['latency_ms'], 99)

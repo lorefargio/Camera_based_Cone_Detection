@@ -10,7 +10,13 @@ def analyze(csv_file):
         return
 
     df = pd.read_csv(csv_file)
+    df['latency_ms'] = pd.to_numeric(df['latency_ms'], errors='coerce')
+    df = df.dropna(subset=['latency_ms'])
     
+    if df.empty:
+        print(f"Error: {csv_file} contains no valid latency data.")
+        return
+
     # Calculate stats
     avg_latency = df['latency_ms'].mean()
     p99_latency = np.percentile(df['latency_ms'], 99)
