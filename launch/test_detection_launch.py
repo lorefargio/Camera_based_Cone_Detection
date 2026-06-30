@@ -13,7 +13,6 @@ def generate_launch_description():
     # Launch Configurations
     use_zed = LaunchConfiguration('use_zed')
     use_bag = LaunchConfiguration('use_bag')
-    bag = LaunchConfiguration('bag')
     engine_path = LaunchConfiguration('engine_path')
     publish_debug = LaunchConfiguration('publish_debug')
     export_stats = LaunchConfiguration('export_stats')
@@ -30,12 +29,6 @@ def generate_launch_description():
         condition=IfCondition(use_zed) and UnlessCondition(use_bag)
     )
 
-    # 2. ROS Bag Play
-    bag_play = ExecuteProcess(
-        cmd=['ros2', 'bag', 'play', bag],
-        output='screen',
-        condition=IfCondition(use_bag)
-    )
 
     # 3. Perception Node
     perception_node = Node(
@@ -45,7 +38,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'engine_path': engine_path,
-            'conf_threshold': 0.5,
+            'conf_threshold': 0.6,
             'nms_threshold': 0.45,
             'publish_debug': publish_debug,
             'export_stats': export_stats,
@@ -61,11 +54,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_zed', default_value='false', 
                               description='Lancia i driver fisici della ZED 2i'),
         
-        DeclareLaunchArgument('use_bag', default_value='false', 
+        DeclareLaunchArgument('use_bag', default_value='true', 
                               description='Lancia il replay di una rosbag invece della camera'),
-        
-        DeclareLaunchArgument('bag', default_value='', 
-                              description='Percorso assoluto al file .mcap o alla cartella della rosbag'),
         
         DeclareLaunchArgument('engine_path', 
                               default_value=os.path.join(pkg_share, 'models', 'yolo26_fp16.engine'), 
@@ -81,6 +71,5 @@ def generate_launch_description():
                               description='Abilita l\'uso dei custom CUDA kernels (src/cuda_kernels.cu) per preprocessing e postprocessing'),
 
         zed_launch,
-        bag_play,
         perception_node,
     ])

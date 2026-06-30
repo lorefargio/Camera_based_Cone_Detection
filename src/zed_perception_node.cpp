@@ -113,6 +113,5 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     }
 }
 
-} // namespace
 
 RCLCPP_COMPONENTS_REGISTER_NODE(ZedPerceptionNode)

@@ -62,19 +62,8 @@ if (CUDA_FOUND AND TENSORRT_LIBRARY)
       EXECUTABLE perception_node
     )
 
-    add_executable(video_tester src/test_video.cpp src/yolo26_tensorrt.cpp src/cuda_kernels.cu)
-    set_target_properties(video_tester PROPERTIES CUDA_ARCHITECTURES "75")
-    target_link_libraries(video_tester
-      ${OpenCV_LIBRARIES}
-      ${CUDA_LIBRARIES}
-      ${TENSORRT_LIBRARY}
-      cuda
-    )
-    ament_target_dependencies(video_tester
-      rclcpp geometry_msgs sensor_msgs cv_bridge
-    )
 
-    install(TARGETS camera_perception_core perception_node video_tester
+    install(TARGETS camera_perception_core perception_node
       ARCHIVE DESTINATION lib
       LIBRARY DESTINATION lib
       RUNTIME DESTINATION lib/${PROJECT_NAME}
