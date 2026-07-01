@@ -222,6 +222,8 @@ void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canva
     context_->enqueueV3(stream_);
     cudaEventRecord(stop_infer_, stream_);
 
+    cudaStreamSynchronize(stream_);
+
     auto t_start_post = std::chrono::high_resolution_clock::now();
     postprocess_mask_cpu(bgr_image, d_mask_canvas);
     auto t_end_post = std::chrono::high_resolution_clock::now();
