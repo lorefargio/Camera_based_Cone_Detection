@@ -20,6 +20,14 @@ Yolo26nSeg::Yolo26nSeg(const std::string &engine_path, float conf_threshold,
   loadEngine(engine_path);
   allocateBuffers();
   cudaStreamCreate(&stream_);
+
+  cudaEventCreate(&start_pre_);
+  cudaEventCreate(&stop_pre_);
+  cudaEventCreate(&start_infer_);
+  cudaEventCreate(&stop_infer_);
+  cudaEventCreate(&start_post_);
+  cudaEventCreate(&stop_post_);
+  events_created_ = true;
 }
 
 Yolo26nSeg::~Yolo26nSeg() {
@@ -27,6 +35,15 @@ Yolo26nSeg::~Yolo26nSeg() {
   for (void *buf : buffers_) cudaFree(buf);
   cudaFree(d_src_image_);
   cudaFree(d_proto_reformatted_);
+
+  if (events_created_) {
+    cudaEventDestroy(start_pre_);
+    cudaEventDestroy(stop_pre_);
+    cudaEventDestroy(start_infer_);
+    cudaEventDestroy(stop_infer_);
+    cudaEventDestroy(start_post_);
+    cudaEventDestroy(stop_post_);
+  }
 }
 
 void Yolo26nSeg::loadEngine(const std::string &path) {
@@ -168,40 +185,72 @@ void Yolo26nSeg::postprocess_mask_cpu(const cv::Mat& bgr_image, uint8_t* d_mask_
 
 void Yolo26nSeg::infer_to_canvas(const cv::Mat& bgr_image, uint8_t* d_mask_canvas) {
   if (use_cuda_kernels_) {
+    cudaEventRecord(start_pre_, stream_);
     size_t src_size = bgr_image.total() * bgr_image.elemSize();
     cudaMemcpyAsync(d_src_image_, bgr_image.data, src_size, cudaMemcpyHostToDevice, stream_);
 
     // 1. Bilinear Preprocessing (Resizing + Normalization)
     launch_preprocess((uint8_t*)d_src_image_, buffers_[0], bgr_image.cols, bgr_image.rows, input_dims_.d[3], input_dims_.d[2], bgr_image.channels(), is_fp16_, stream_);
-    
+    cudaEventRecord(stop_pre_, stream_);
+
+    cudaEventRecord(start_infer_, stream_);
     // 2. TensorRT Inference Execution
     context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
     context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
     context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
     context_->enqueueV3(stream_);
+    cudaEventRecord(stop_infer_, stream_);
 
+    cudaEventRecord(start_post_, stream_);
     // 3. Prototype Reformatting (CHW to HWC for cache locality)
     launch_reformat_prototypes(buffers_[2], d_proto_reformatted_, 160, 160, 32, is_fp16_, stream_);
     
     // 4. Semantic Mask Generation via GPU Kernel
     launch_postprocess_mask(buffers_[1], d_proto_reformatted_, d_mask_canvas, bgr_image.cols, bgr_image.rows, conf_threshold_, is_fp16_, stream_);
+    cudaEventRecord(stop_post_, stream_);
   } else {
     // STANDARD BASELINE PATH (Standard GPU Inference + CPU Support)
+    auto t_start_pre = std::chrono::high_resolution_clock::now();
     preprocess_cpu(bgr_image);
+    auto t_end_pre = std::chrono::high_resolution_clock::now();
+    preprocess_ms_ = std::chrono::duration<double, std::milli>(t_end_pre - t_start_pre).count();
     
+    cudaEventRecord(start_infer_, stream_);
     context_->setTensorAddress(input_name_.c_str(), buffers_[0]);
     context_->setTensorAddress(output0_name_.c_str(), buffers_[1]);
     context_->setTensorAddress(output1_name_.c_str(), buffers_[2]);
     context_->enqueueV3(stream_);
+    cudaEventRecord(stop_infer_, stream_);
 
+    auto t_start_post = std::chrono::high_resolution_clock::now();
     postprocess_mask_cpu(bgr_image, d_mask_canvas);
+    auto t_end_post = std::chrono::high_resolution_clock::now();
+    postprocess_ms_ = std::chrono::duration<double, std::milli>(t_end_post - t_start_post).count();
   }
 }
 
 std::vector<DetectedCone> Yolo26nSeg::infer(const cv::Mat &bgr_image) {
   // Trigger asynchronous download of the primary detection output
   cudaMemcpyAsync(host_output0_raw_.data(), buffers_[1], host_output0_raw_.size(), cudaMemcpyDeviceToHost, stream_);
-  return postprocess(host_output0_raw_.data(), nullptr, bgr_image.size());
+  cudaStreamSynchronize(stream_);
+
+  auto start = std::chrono::high_resolution_clock::now();
+  auto detections = postprocess(host_output0_raw_.data(), nullptr, bgr_image.size());
+  auto end = std::chrono::high_resolution_clock::now();
+  double extra_post_ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+  if (use_cuda_kernels_) {
+    updateTimings(extra_post_ms);
+  } else {
+    float infer_time = 0.0f;
+    if (events_created_) {
+      cudaEventElapsedTime(&infer_time, start_infer_, stop_infer_);
+    }
+    inference_ms_ = infer_time;
+    postprocess_ms_ += extra_post_ms;
+  }
+
+  return detections;
 }
 
 std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void*, const cv::Size &original_size) {
@@ -240,4 +289,20 @@ std::vector<DetectedCone> Yolo26nSeg::postprocess(void* outA, void*, const cv::S
     detections.push_back(det);
   }
   return detections;
+}
+
+void Yolo26nSeg::updateTimings(double extra_postprocess_ms) {
+  float pre_time = 0.0f;
+  float infer_time = 0.0f;
+  float post_time = 0.0f;
+  
+  if (events_created_) {
+    cudaEventElapsedTime(&pre_time, start_pre_, stop_pre_);
+    cudaEventElapsedTime(&infer_time, start_infer_, stop_infer_);
+    cudaEventElapsedTime(&post_time, start_post_, stop_post_);
+  }
+  
+  preprocess_ms_ = pre_time;
+  inference_ms_ = infer_time;
+  postprocess_ms_ = post_time + extra_postprocess_ms;
 }

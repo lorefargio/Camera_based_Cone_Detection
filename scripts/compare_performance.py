@@ -32,11 +32,19 @@ def analyze_and_compare(pt_csv, trt_nocuda_csv, trt_cuda_csv):
         std_latency = df['latency_ms'].std()
         avg_fps = df['hz'].mean() if 'hz' in df.columns else (1000.0 / avg_latency if avg_latency > 0 else 0)
         
+        # Calculate split timings if available
+        avg_pre = df['preprocess_ms'].mean() if 'preprocess_ms' in df.columns else np.nan
+        avg_infer = df['inference_ms'].mean() if 'inference_ms' in df.columns else np.nan
+        avg_post = df['postprocess_ms'].mean() if 'postprocess_ms' in df.columns else np.nan
+        
         results.append({
             'Configuration': name,
             'Avg Latency (ms)': f"{avg_latency:.2f}",
-            'P95 Latency (ms)': f"{p95_latency:.2f}",
-            'P99 Latency (ms)': f"{p99_latency:.2f}",
+            'P95 (ms)': f"{p95_latency:.2f}",
+            'P99 (ms)': f"{p99_latency:.2f}",
+            'Preprocess (ms)': f"{avg_pre:.2f}" if not np.isnan(avg_pre) else "N/A",
+            'Inference (ms)': f"{avg_infer:.2f}" if not np.isnan(avg_infer) else "N/A",
+            'Postprocess (ms)': f"{avg_post:.2f}" if not np.isnan(avg_post) else "N/A",
             'Jitter/Std Dev (ms)': f"{std_latency:.2f}",
             'Avg FPS (Hz)': f"{avg_fps:.1f}"
         })

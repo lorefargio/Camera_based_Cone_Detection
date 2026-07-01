@@ -38,6 +38,10 @@ public:
      */
     cudaStream_t getStream() const { return yolo_ ? yolo_->getStream() : nullptr; }
 
+    double getPreprocessTime() const { return yolo_ ? yolo_->getPreprocessTime() : 0.0; }
+    double getInferenceTime() const { return yolo_ ? yolo_->getInferenceTime() : 0.0; }
+    double getPostprocessTime() const { return yolo_ ? yolo_->getPostprocessTime() : 0.0; }
+
 private:
     std::unique_ptr<Yolo26nSeg> yolo_;
     uint8_t* d_mask_canvas_ = nullptr;

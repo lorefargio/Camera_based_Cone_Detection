@@ -44,6 +44,12 @@ class PyTorchPerceptionNode(Node):
         total_ms = (end_time - start_time) * 1000.0
         hz = 1000.0 / total_ms if total_ms > 0 else 0.0
         
+        # Get timings in ms
+        speed = results[0].speed
+        preprocess_ms = speed.get('preprocess', 0.0)
+        inference_ms = speed.get('inference', 0.0)
+        postprocess_ms = speed.get('postprocess', 0.0)
+        
         self.count += 1
         # Skip the first frame for warm-up metrics (like C++ node does)
         if self.count > 1:
@@ -51,7 +57,10 @@ class PyTorchPerceptionNode(Node):
                 'timestamp': msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec,
                 'latency_ms': total_ms,
                 'hz': hz,
-                'detections': len(results[0].boxes) if results[0].boxes is not None else 0
+                'detections': len(results[0].boxes) if results[0].boxes is not None else 0,
+                'preprocess_ms': preprocess_ms,
+                'inference_ms': inference_ms,
+                'postprocess_ms': postprocess_ms
             })
             
             if self.count % 10 == 0:

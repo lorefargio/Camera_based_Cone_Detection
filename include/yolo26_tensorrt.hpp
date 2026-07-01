@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <chrono>
 #include <opencv2/opencv.hpp>
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>
@@ -54,6 +55,10 @@ public:
      */
     cudaStream_t getStream() const { return stream_; }
 
+    double getPreprocessTime() const { return preprocess_ms_; }
+    double getInferenceTime() const { return inference_ms_; }
+    double getPostprocessTime() const { return postprocess_ms_; }
+
 private:
     /**
      * @brief Deserializes and loads the TensorRT engine.
@@ -88,6 +93,8 @@ private:
      */
     std::vector<DetectedCone> postprocess(void* output0, void* output1, const cv::Size& original_size);
 
+    void updateTimings(double extra_postprocess_ms);
+
     // TensorRT resources
     std::unique_ptr<nvinfer1::IRuntime> runtime_;
     std::unique_ptr<nvinfer1::ICudaEngine> engine_;
@@ -99,6 +106,16 @@ private:
     void* d_src_image_;           ///< Device pointer for the raw source image
     void* d_proto_reformatted_;   ///< Device pointer for the HWC-reformatted prototypes
     
+    // CUDA Events for timing
+    cudaEvent_t start_pre_, stop_pre_;
+    cudaEvent_t start_infer_, stop_infer_;
+    cudaEvent_t start_post_, stop_post_;
+    bool events_created_ = false;
+
+    double preprocess_ms_ = 0.0;
+    double inference_ms_ = 0.0;
+    double postprocess_ms_ = 0.0;
+
     float conf_threshold_;
     float nms_threshold_;
     bool is_fp16_;

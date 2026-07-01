@@ -31,7 +31,7 @@ ZedPerceptionNode::ZedPerceptionNode(const rclcpp::NodeOptions& options)
 
     if (config_.export_stats) {
         stats_file_.open("camera_stats.csv");
-        stats_file_ << "timestamp,latency_ms,hz,detections,cuda_kernels_enabled\n";
+        stats_file_ << "timestamp,latency_ms,hz,detections,cuda_kernels_enabled,preprocess_ms,inference_ms,postprocess_ms\n";
     }
 
     // 3. Setup subscriptions
@@ -105,7 +105,11 @@ void ZedPerceptionNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr m
     iter_count_++;
     if (config_.export_stats && stats_file_.is_open() && iter_count_ > 1) {
         auto now = this->get_clock()->now();
-        stats_file_ << now.nanoseconds() << "," << total_ms << "," << hz << "," << detections.size() << "," << (config_.use_cuda_kernels ? 1 : 0) << "\n";
+        stats_file_ << now.nanoseconds() << "," << total_ms << "," << hz << "," 
+                    << detections.size() << "," << (config_.use_cuda_kernels ? 1 : 0) << ","
+                    << pipeline_->getPreprocessTime() << ","
+                    << pipeline_->getInferenceTime() << ","
+                    << pipeline_->getPostprocessTime() << "\n";
     }
     
     if (iter_count_ > 1) {
